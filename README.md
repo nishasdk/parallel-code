@@ -36,7 +36,7 @@
 
 ## Why Parallel Code?
 
-- **Use the AI coding tools you already trust** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli) — all from one interface.
+- **Use the AI coding tools you already trust** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), and [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) — all from one interface.
 - **Free and open source** — no extra subscription required. MIT licensed.
 - **Keep every change isolated and reviewable** — each task gets its own git branch and worktree automatically.
 - **Run agents in parallel, not in sequence** — five agents on five features at the same time, zero conflicts.
@@ -71,10 +71,18 @@ When you're happy with the result, merge the branch back to main from the sideba
 <summary><strong>More features</strong></summary>
 
 - Tiled panel layout with drag-to-reorder
-- Built-in diff viewer and changed files list per task
+- **Focus mode** — single-task layout with a clean two-column view on wide screens (`Ctrl+Shift+F`)
+- Built-in diff viewer with inline review comments and per-commit navigation
+- **Steps tracking panel** — engineering-manager-style timeline of agent progress (writes to `.claude/steps.json`)
+- **Notes panel per task** — jot ideas, then send the notes straight to the agent as a prompt
+- **PR CI status watcher** — desktop notification when GitHub checks settle
 - Shell terminals per task, scoped to the worktree
-- Direct mode for working on the main branch without isolation
-- Six themes — Minimal, Graphite, Classic, Indigo, Ember, Glacier
+- **Direct mode** for working on the main branch without isolation, plus support for **folders without a git repo**
+- **Existing worktree import** — bring already-created worktrees into Parallel Code
+- **Sandboxing with project-specific Dockerfiles** — drop a `.parallel-code/Dockerfile` into the project and tasks run inside it
+- **Coverage radar** — per-file test-coverage badges in the Changed Files panel
+- **Configurable keyboard shortcuts** with per-agent presets
+- 10 themes — Islands Dark, Minimal, Graphite, Midnight, Classic, Indigo, Ember, Glacier, Zenburnesque, Workbench
 - State persists across restarts
 - macOS and Linux
 
@@ -98,7 +106,7 @@ When you're happy with the result, merge the branch back to main from the sideba
    - **macOS** — `.dmg` (universal)
    - **Linux** — `.AppImage` or `.deb`
 
-2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+2. **Install at least one AI coding CLI:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli), or [Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
 
 3. **Open Parallel Code**, point it at a git repo, and start dispatching tasks.
 
@@ -135,6 +143,7 @@ Requires [Node.js](https://nodejs.org/) v18+.
 | `Alt+Arrows`          | Navigate between panels        |
 | `Ctrl+Alt+Left/Right` | Reorder active task            |
 | `Ctrl+B`              | Toggle sidebar                 |
+| `Ctrl+Shift+F`        | Toggle focus mode              |
 | **Terminals**         |                                |
 | `Ctrl+Shift+T`        | New shell terminal             |
 | `Ctrl+Shift+D`        | New standalone terminal        |
