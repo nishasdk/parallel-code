@@ -345,6 +345,11 @@ async function pickMergeBase(
  *    per-commit patches. Logged for diagnostics.
  *
  * Any git invocation failure falls back to the picked base unchanged.
+ *
+ * Dual-side counterpart: `checkMergeStatus` applies `--cherry-pick
+ * --right-only` to `HEAD...<main>` to count *main's* unique commits not in
+ * HEAD (i.e. how stale HEAD is relative to main), so the merge dialog's
+ * "Rebase first" prompt agrees with this filter.
  */
 async function refineDiffBaseWithCherryPick(
   repoRoot: string,
@@ -1422,21 +1427,19 @@ export async function checkMergeStatus(
   const mainBranch = baseBranch ?? (await detectMainBranch(worktreePath));
 
   // Count main commits not in HEAD, excluding patch-equivalents already
-  // applied via rebase/cherry-pick. Mirrors the changed-files diff base
-  // refinement so the dialog doesn't demand a needless rebase when HEAD's
-  // history already carries main's recent commits with different SHAs.
+  // applied via rebase/cherry-pick. Mirrors the `--cherry-pick --right-only`
+  // filter `refineDiffBaseWithCherryPick` uses on the diff side, so the
+  // dialog doesn't demand a needless rebase when HEAD's history already
+  // carries main's recent commits with different SHAs. Unlike the diff-side
+  // helper we *don't* pass `--no-merges`: it's load-bearing there for `%H %P`
+  // single-parent parsing, but here it would silently drop merge commits
+  // that brought genuinely-new content into main (so-called "evil merges"),
+  // turning a real "rebase first" warning into a quiet zero.
   let mainAheadCount = 0;
   try {
     const { stdout } = await exec(
       'git',
-      [
-        'rev-list',
-        '--count',
-        '--cherry-pick',
-        '--right-only',
-        '--no-merges',
-        `HEAD...${mainBranch}`,
-      ],
+      ['rev-list', '--count', '--cherry-pick', '--right-only', `HEAD...${mainBranch}`],
       { cwd: worktreePath },
     );
     mainAheadCount = parseInt(stdout.trim(), 10) || 0;

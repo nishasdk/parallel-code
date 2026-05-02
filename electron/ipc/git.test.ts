@@ -1246,8 +1246,10 @@ describe('checkMergeStatus (cherry-pick filtered ahead count)', () => {
     expect(revListCall).toBeDefined();
     expect(revListCall).toContain('--cherry-pick');
     expect(revListCall).toContain('--right-only');
-    expect(revListCall).toContain('--no-merges');
     expect(revListCall).toContain('HEAD...main');
+    // --no-merges would silently drop merge commits with unique content
+    // (evil merges) and undercount truly-ahead main, so it must not be set.
+    expect(revListCall).not.toContain('--no-merges');
   });
 
   it('reports zero ahead when every main commit is patch-equivalent to one in HEAD', async () => {
@@ -1270,7 +1272,7 @@ describe('checkMergeStatus (cherry-pick filtered ahead count)', () => {
     expect(mergeTreeCall).toBeUndefined();
   });
 
-  it('reports the cherry-pick-filtered count when some main commits are genuinely new', async () => {
+  it('runs the conflict probe and surfaces conflicting files when main is genuinely ahead', async () => {
     const calls: string[][] = [];
     setupMock(calls, (args, cb) => {
       const [cmd] = args;
@@ -1279,7 +1281,12 @@ describe('checkMergeStatus (cherry-pick filtered ahead count)', () => {
         return cb(null, '2\n', '');
       }
       if (cmd === 'merge-tree') {
-        return cb(null, '', '');
+        // git merge-tree exits non-zero and emits conflict info on stderr/stdout
+        // when the trial merge fails — checkMergeStatus parses the rejection.
+        const err = new Error(
+          'CONFLICT (content): Merge conflict in src/foo.ts\nCONFLICT (content): Merge conflict in src/bar.ts',
+        );
+        return cb(err, '', '');
       }
       return cb(null, '', '');
     });
@@ -1287,5 +1294,10 @@ describe('checkMergeStatus (cherry-pick filtered ahead count)', () => {
     const result = await checkMergeStatus(uniqueWorktreePath(), 'main');
 
     expect(result.main_ahead_count).toBe(2);
+    const mergeTreeCall = calls.find((a) => a[0] === 'merge-tree');
+    expect(mergeTreeCall).toBeDefined();
+    expect(mergeTreeCall).toContain('HEAD');
+    expect(mergeTreeCall).toContain('main');
+    expect(result.conflicting_files).toEqual(['src/foo.ts', 'src/bar.ts']);
   });
 });
