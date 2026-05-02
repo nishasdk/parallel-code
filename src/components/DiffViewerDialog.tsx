@@ -8,7 +8,12 @@ import { sf } from '../lib/fontScale';
 import { parseUnifiedDiff } from '../lib/unified-diff-parser';
 import { evictStaleAnnotations } from '../lib/review-eviction';
 import { ScrollingDiffView } from './ScrollingDiffView';
-import { CommitNavBar } from './CommitNavBar';
+import {
+  CommitNavBar,
+  type CommitSelection,
+  isCommitHashSelection,
+  isUncommittedSelection,
+} from './CommitNavBar';
 import { ReviewCommentsButton, ReviewSidebarPanel } from './ReviewSidebarPanel';
 import { ReviewProvider, useReview } from './ReviewProvider';
 import type { FileDiff } from '../lib/unified-diff-parser';
@@ -31,10 +36,10 @@ interface DiffViewerDialogProps {
   agentId?: string;
   /** List of commits on this branch (oldest first) for commit navigation */
   commitList?: CommitInfo[];
-  /** Currently selected commit hash, or null for "all changes" mode */
-  selectedCommit?: string | null;
-  /** Callback to navigate to a different commit or null for all changes */
-  onCommitNavigate?: (hash: string | null) => void;
+  /** Current selection: null = all changes, sentinel = uncommitted-only, hash = single commit */
+  selectedCommit?: CommitSelection;
+  /** Callback to navigate to a different selection */
+  onCommitNavigate?: (selection: CommitSelection) => void;
   /** Git isolation mode — CommitNavBar is only shown for worktree-isolated tasks */
   gitIsolation?: GitIsolationMode;
 }
@@ -135,7 +140,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
     const scrollTarget = props.scrollToFile;
     // Access selectedCommit before the early return so the effect tracks it
     // even when the dialog is closed — ensures we re-run on reopen.
-    const commitHash = props.selectedCommit;
+    const selection = props.selectedCommit;
     if (!scrollTarget) return;
 
     const worktreePath = props.worktreePath;
@@ -151,9 +156,15 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
 
     let diffPromise: Promise<string>;
 
-    if (commitHash && worktreePath) {
+    if (isCommitHashSelection(selection) && worktreePath) {
       // Single-commit mode
-      diffPromise = invoke<string>(IPC.GetCommitDiffs, { worktreePath, commitHash });
+      diffPromise = invoke<string>(IPC.GetCommitDiffs, {
+        worktreePath,
+        commitHash: selection,
+      });
+    } else if (isUncommittedSelection(selection) && worktreePath) {
+      // Uncommitted-only mode (worktree only — branch fallback has no working tree)
+      diffPromise = invoke<string>(IPC.GetUncommittedFileDiffs, { worktreePath });
     } else {
       // All-changes mode (existing behavior)
       const worktreePromise = worktreePath

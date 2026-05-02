@@ -57,6 +57,7 @@ import {
   getBranchCommits,
   getCommitChangedFiles,
   getCommitDiffs,
+  getUncommittedFileDiffs,
 } from './git.js';
 import { createTask, deleteTask } from './tasks.js';
 import { listAgents } from './agents.js';
@@ -470,6 +471,10 @@ export function registerAllHandlers(win: BrowserWindow): void {
     validatePath(args.worktreePath, 'worktreePath');
     validateCommitHash(args.commitHash, 'commitHash');
     return getCommitDiffs(args.worktreePath, args.commitHash);
+  });
+  ipcMain.handle(IPC.GetUncommittedFileDiffs, (_e, args) => {
+    validatePath(args.worktreePath, 'worktreePath');
+    return getUncommittedFileDiffs(args.worktreePath);
   });
   ipcMain.handle(IPC.GetCoverageSummary, (_e, args) => {
     validatePath(args.repoRoot, 'repoRoot');

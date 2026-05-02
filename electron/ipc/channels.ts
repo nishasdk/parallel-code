@@ -39,6 +39,7 @@ export enum IPC {
   GetBranchCommits = 'get_branch_commits',
   GetCommitChangedFiles = 'get_commit_changed_files',
   GetCommitDiffs = 'get_commit_diffs',
+  GetUncommittedFileDiffs = 'get_uncommitted_file_diffs',
   GetCoverageSummary = 'get_coverage_summary',
 
   // Persistence

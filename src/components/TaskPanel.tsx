@@ -26,6 +26,7 @@ import { TaskTitleBar } from './TaskTitleBar';
 import { TaskBranchInfoBar } from './TaskBranchInfoBar';
 import { TaskNotesBody } from './TaskNotesBody';
 import { TaskChangedFilesSection } from './TaskChangedFilesSection';
+import { isCommitHashSelection, type CommitSelection } from './CommitNavBar';
 import { TaskShellSection } from './TaskShellSection';
 import { TaskStepsSection } from './TaskStepsSection';
 import { TaskAITerminal } from './TaskAITerminal';
@@ -56,7 +57,7 @@ export function TaskPanel(props: TaskPanelProps) {
   onCleanup(() => clearTimeout(pushSuccessTimer));
   const [diffScrollTarget, setDiffScrollTarget] = createSignal<string | null>(null);
   const [commitList, setCommitList] = createSignal<CommitInfo[]>([]);
-  const [selectedCommit, setSelectedCommit] = createSignal<string | null>(null);
+  const [selectedCommit, setSelectedCommit] = createSignal<CommitSelection>(null);
   const [editingProjectId, setEditingProjectId] = createSignal<string | null>(null);
   // Jump-to-step state is a single signal so ↗ can be hidden entirely before
   // TerminalView is ready (otherwise firstIndex would default to 0, showing ↗
@@ -180,9 +181,10 @@ export function TaskPanel(props: TaskPanelProps) {
         if (cancelled) return;
         batch(() => {
           setCommitList(result);
-          // Reset selection if the selected commit no longer exists
+          // Reset selection if the selected commit no longer exists. The
+          // sentinel "uncommitted" selection is not a hash, so it is preserved.
           const sel = selectedCommit();
-          if (sel !== null && !result.some((c) => c.hash === sel)) {
+          if (isCommitHashSelection(sel) && !result.some((c) => c.hash === sel)) {
             setSelectedCommit(null);
           }
         });

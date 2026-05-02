@@ -5,6 +5,11 @@ import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { getStatusColor } from '../lib/status-colors';
 import { buildFileTree, flattenVisibleTree } from '../lib/file-tree';
+import {
+  type CommitSelection,
+  isCommitHashSelection,
+  isUncommittedSelection,
+} from './CommitNavBar';
 import type { ChangedFile, CoverageFileSummary, CoverageSummary } from '../ipc/types';
 
 interface ChangedFilesListProps {
@@ -21,8 +26,13 @@ interface ChangedFilesListProps {
   branchName?: string | null;
   /** Base branch for diff comparison (e.g. 'main', 'develop'). Undefined = auto-detect. */
   baseBranch?: string;
-  /** When set to a commit hash, show files for that single commit. null/undefined = all changes. */
-  selectedCommit?: string | null;
+  /**
+   * Selection mode for the file list:
+   * - undefined/null: all changes (committed + uncommitted)
+   * - UNCOMMITTED_SELECTION: only currently uncommitted changes
+   * - any commit hash: files for that single commit
+   */
+  selectedCommit?: CommitSelection;
 }
 
 const SOURCE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/i;
@@ -87,11 +97,12 @@ function coverageBadgeTitle(summary: CoverageFileSummary): string {
 
 function FileCoverageBadge(props: {
   file: ChangedFile;
-  selectedCommit?: string | null;
+  selectedCommit?: CommitSelection;
   summary?: CoverageFileSummary;
   hasCoverageArtifact: boolean;
 }) {
-  const isEligible = () => !props.selectedCommit && isCoverageEligible(props.file);
+  const isEligible = () =>
+    !isCommitHashSelection(props.selectedCommit) && isCoverageEligible(props.file);
   const summary = () => (isEligible() ? props.summary : undefined);
 
   return (
@@ -271,16 +282,19 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
 
   // Poll every 5s, matching the git status polling interval.
   // Falls back to branch-based diff when worktree path doesn't exist.
-  // When selectedCommit is set, fetches files for that single commit (no polling).
+  // When selectedCommit is a hash, fetches files for that single commit (no polling).
+  // When selectedCommit is the uncommitted sentinel, fetches all changes and filters.
   createEffect(() => {
     const path = props.worktreePath;
     const projectRoot = props.projectRoot;
     const branchName = props.branchName;
     const baseBranch = props.baseBranch;
-    const commitHash = props.selectedCommit;
+    const selection = props.selectedCommit;
+    const singleCommitHash = isCommitHashSelection(selection) ? selection : null;
+    const uncommittedOnly = isUncommittedSelection(selection);
     // In single-commit mode the user explicitly navigated — always fetch.
-    // In all-changes mode skip when inactive to avoid background polling.
-    if (!commitHash && !props.isActive) return;
+    // In all-changes / uncommitted-only mode skip when inactive to avoid background polling.
+    if (singleCommitHash === null && !props.isActive) return;
     let cancelled = false;
     let inFlight = false;
     let usingBranchFallback = false;
@@ -290,11 +304,11 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
       inFlight = true;
       try {
         // Single-commit mode: fetch files for that commit only
-        if (commitHash && path) {
+        if (singleCommitHash && path) {
           try {
             const result = await invoke<ChangedFile[]>(IPC.GetCommitChangedFiles, {
               worktreePath: path,
-              commitHash,
+              commitHash: singleCommitHash,
             });
             if (!cancelled) setFiles(result);
           } catch {
@@ -310,7 +324,9 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
               worktreePath: path,
               baseBranch,
             });
-            if (!cancelled) setFiles(result);
+            if (!cancelled) {
+              setFiles(uncommittedOnly ? result.filter((f) => !f.committed) : result);
+            }
             return;
           } catch {
             // Worktree may not exist — try branch fallback below
@@ -326,7 +342,9 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
               branchName,
               baseBranch,
             });
-            if (!cancelled) setFiles(result);
+            if (!cancelled) {
+              setFiles(uncommittedOnly ? result.filter((f) => !f.committed) : result);
+            }
           } catch {
             // Branch may no longer exist
           }
@@ -338,7 +356,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
 
     void refresh();
     // No polling needed for single-commit view (committed data is immutable)
-    const timer = commitHash
+    const timer = singleCommitHash
       ? undefined
       : setInterval(() => {
           if (!usingBranchFallback) void refresh();
@@ -351,8 +369,8 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
 
   createEffect(() => {
     const repoRoot = props.worktreePath;
-    const commitHash = props.selectedCommit;
-    if (!repoRoot || commitHash) {
+    const selection = props.selectedCommit;
+    if (!repoRoot || isCommitHashSelection(selection)) {
       setCoverage(null);
       return;
     }
@@ -421,7 +439,8 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
                 cursor: 'pointer',
                 'border-radius': '3px',
                 opacity:
-                  !props.selectedCommit && (row().isDir || row().node.file?.committed)
+                  !isCommitHashSelection(props.selectedCommit) &&
+                  (row().isDir || row().node.file?.committed)
                     ? '0.45'
                     : '1',
                 background: selectedIndex() === i ? theme.bgHover : 'transparent',
@@ -551,7 +570,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
               'flex-wrap': 'wrap',
             }}
           >
-            <Show when={!props.selectedCommit && eligibleFiles().length > 0}>
+            <Show when={!isCommitHashSelection(props.selectedCommit) && eligibleFiles().length > 0}>
               <div
                 style={{
                   display: 'flex',

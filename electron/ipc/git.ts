@@ -1076,6 +1076,52 @@ export async function getChangedFiles(
   return files;
 }
 
+async function buildUntrackedPseudoDiffs(worktreePath: string): Promise<string[]> {
+  const parts: string[] = [];
+  let stdout = '';
+  try {
+    const result = await exec('git', ['ls-files', '--others', '--exclude-standard'], {
+      cwd: worktreePath,
+      maxBuffer: MAX_BUFFER,
+    });
+    stdout = result.stdout;
+  } catch {
+    return parts;
+  }
+
+  for (const line of stdout.split('\n')) {
+    const filePath = normalizeStatusPath(line);
+    if (!filePath) continue;
+    const fullPath = path.join(worktreePath, filePath);
+    try {
+      const stat = await fs.promises.stat(fullPath);
+      if (!stat.isFile() || stat.size >= MAX_BUFFER) continue;
+      if (await isBinaryFile(fullPath)) {
+        parts.push(
+          `diff --git a/${filePath} b/${filePath}\nnew file mode 100644\nBinary files /dev/null and b/${filePath} differ\n`,
+        );
+        continue;
+      }
+      const content = await fs.promises.readFile(fullPath, 'utf8');
+      const lines = content.split('\n');
+      const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
+      const pseudoLines: string[] = [];
+      pseudoLines.push(`diff --git a/${filePath} b/${filePath}`);
+      pseudoLines.push('new file mode 100644');
+      pseudoLines.push('--- /dev/null');
+      pseudoLines.push(`+++ b/${filePath}`);
+      pseudoLines.push(`@@ -0,0 +1,${lineCount} @@`);
+      for (let i = 0; i < lineCount; i++) {
+        pseudoLines.push(`+${lines[i]}`);
+      }
+      parts.push(pseudoLines.join('\n') + '\n');
+    } catch {
+      /* skip unreadable files */
+    }
+  }
+  return parts;
+}
+
 export async function getAllFileDiffs(worktreePath: string, baseBranch?: string): Promise<string> {
   const headHash = await pinHead(worktreePath);
 
@@ -1097,47 +1143,29 @@ export async function getAllFileDiffs(worktreePath: string, baseBranch?: string)
     /* empty */
   }
 
-  // Untracked files: build pseudo-diffs
-  const untrackedParts: string[] = [];
+  const untrackedParts = await buildUntrackedPseudoDiffs(worktreePath);
+  const parts = [combinedDiff, untrackedParts.join('')].filter((p) => p.length > 0);
+  return parts.join('\n');
+}
+
+export async function getUncommittedFileDiffs(worktreePath: string): Promise<string> {
+  const headHash = await pinHead(worktreePath);
+
+  // Diff against HEAD captures only tracked uncommitted changes (working tree
+  // vs HEAD), excluding committed work. Uses the HEAD SHA directly so it does
+  // not need the index lock and works while an agent holds it.
+  let combinedDiff = '';
   try {
-    const { stdout } = await exec('git', ['ls-files', '--others', '--exclude-standard'], {
+    const { stdout } = await exec('git', ['diff', '-U3', headHash], {
       cwd: worktreePath,
       maxBuffer: MAX_BUFFER,
     });
-    for (const line of stdout.split('\n')) {
-      const filePath = normalizeStatusPath(line);
-      if (!filePath) continue;
-      const fullPath = path.join(worktreePath, filePath);
-      try {
-        const stat = await fs.promises.stat(fullPath);
-        if (!stat.isFile() || stat.size >= MAX_BUFFER) continue;
-        if (await isBinaryFile(fullPath)) {
-          untrackedParts.push(
-            `diff --git a/${filePath} b/${filePath}\nnew file mode 100644\nBinary files /dev/null and b/${filePath} differ\n`,
-          );
-          continue;
-        }
-        const content = await fs.promises.readFile(fullPath, 'utf8');
-        const lines = content.split('\n');
-        const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
-        const pseudoLines: string[] = [];
-        pseudoLines.push(`diff --git a/${filePath} b/${filePath}`);
-        pseudoLines.push('new file mode 100644');
-        pseudoLines.push('--- /dev/null');
-        pseudoLines.push(`+++ b/${filePath}`);
-        pseudoLines.push(`@@ -0,0 +1,${lineCount} @@`);
-        for (let i = 0; i < lineCount; i++) {
-          pseudoLines.push(`+${lines[i]}`);
-        }
-        untrackedParts.push(pseudoLines.join('\n') + '\n');
-      } catch {
-        /* skip unreadable files */
-      }
-    }
+    combinedDiff = stdout;
   } catch {
     /* empty */
   }
 
+  const untrackedParts = await buildUntrackedPseudoDiffs(worktreePath);
   const parts = [combinedDiff, untrackedParts.join('')].filter((p) => p.length > 0);
   return parts.join('\n');
 }
