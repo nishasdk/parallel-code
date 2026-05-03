@@ -7,6 +7,7 @@ import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { parseUnifiedDiff } from '../lib/unified-diff-parser';
 import { evictStaleAnnotations } from '../lib/review-eviction';
+import { isMac } from '../lib/platform';
 import { ScrollingDiffView } from './ScrollingDiffView';
 import {
   CommitNavBar,
@@ -256,7 +257,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
           display: 'flex',
           'align-items': 'center',
           gap: '10px',
-          padding: '12px 20px',
+          padding: isMac ? '44px 20px 12px' : '12px 20px',
           'border-bottom': `1px solid ${theme.border}`,
           'flex-shrink': '0',
         }}
