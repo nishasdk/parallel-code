@@ -7,7 +7,7 @@ import { theme } from '../lib/theme';
 import { sf } from '../lib/fontScale';
 import { parseUnifiedDiff } from '../lib/unified-diff-parser';
 import { evictStaleAnnotations } from '../lib/review-eviction';
-import { isMac } from '../lib/platform';
+import { windowChromeTopInset } from '../lib/platform';
 import { ScrollingDiffView } from './ScrollingDiffView';
 import {
   CommitNavBar,
@@ -118,6 +118,7 @@ export function DiffViewerDialog(props: DiffViewerDialogProps) {
 /** Inner content rendered inside ReviewProvider so it can call useReview(). */
 function DiffViewerContent(props: DiffViewerDialogProps) {
   const review = useReview();
+  const headerPaddingTop = `${windowChromeTopInset + 12}px`;
 
   const [parsedFiles, setParsedFiles] = createSignal<FileDiff[]>([]);
   const [loading, setLoading] = createSignal(false);
@@ -257,7 +258,7 @@ function DiffViewerContent(props: DiffViewerDialogProps) {
           display: 'flex',
           'align-items': 'center',
           gap: '10px',
-          padding: isMac ? '44px 20px 12px' : '12px 20px',
+          padding: `${headerPaddingTop} 20px 12px`,
           'border-bottom': `1px solid ${theme.border}`,
           'flex-shrink': '0',
         }}
