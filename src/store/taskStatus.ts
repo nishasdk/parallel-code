@@ -3,6 +3,7 @@ import { invoke } from '../lib/ipc';
 import { IPC } from '../../electron/ipc/channels';
 import { store, setStore } from './core';
 import type { WorktreeStatus } from '../ipc/types';
+import type { TaskGitStatusSnapshot } from './types';
 import { warn as logWarn } from '../lib/log';
 
 // --- Trust-specific patterns (subset of QUESTION_PATTERNS) ---
@@ -754,7 +755,9 @@ export function clearAgentActivity(agentId: string): void {
 
 function isTaskReady(taskId: string): boolean {
   const git = store.taskGitStatus[taskId];
-  return Boolean(git?.has_committed_changes && !git?.has_uncommitted_changes);
+  return Boolean(
+    isGitStatusUsable(git) && git.has_committed_changes && !git.has_uncommitted_changes,
+  );
 }
 
 function hasTaskAgentError(taskId: string): boolean {
@@ -818,18 +821,121 @@ export function getTaskDotStatus(taskId: string): TaskDotStatus {
 
 // --- Git status polling ---
 
-async function refreshTaskGitStatus(taskId: string): Promise<void> {
+const GIT_STATUS_STALE_MS = 5 * 60_000;
+const gitRefreshVersions = new Map<string, number>();
+const gitStatusStaleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function gitStatusErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isGitStatusUsable(git: TaskGitStatusSnapshot | undefined): git is TaskGitStatusSnapshot {
+  return Boolean(
+    git &&
+    !git.error &&
+    !git.refreshing &&
+    !git.stale &&
+    Date.now() - git.refreshedAt <= GIT_STATUS_STALE_MS,
+  );
+}
+
+function nextGitRefreshVersion(taskId: string): number {
+  const version = (gitRefreshVersions.get(taskId) ?? 0) + 1;
+  gitRefreshVersions.set(taskId, version);
+  return version;
+}
+
+function isCurrentGitRefresh(taskId: string, version: number): boolean {
+  return gitRefreshVersions.get(taskId) === version;
+}
+
+function clearGitStatusStaleTimer(taskId: string): void {
+  const timer = gitStatusStaleTimers.get(taskId);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    gitStatusStaleTimers.delete(taskId);
+  }
+}
+
+function scheduleGitStatusStaleTimer(taskId: string, refreshedAt: number): void {
+  clearGitStatusStaleTimer(taskId);
+  const delay = Math.max(0, refreshedAt + GIT_STATUS_STALE_MS - Date.now() + 1);
+  const timer = setTimeout(() => {
+    gitStatusStaleTimers.delete(taskId);
+    const current = store.taskGitStatus[taskId];
+    if (!store.tasks[taskId] || current?.refreshedAt !== refreshedAt) return;
+    if (current.error || current.refreshing || current.stale) return;
+    setStore('taskGitStatus', taskId, { ...current, stale: true });
+  }, delay);
+  gitStatusStaleTimers.set(taskId, timer);
+}
+
+export function clearTaskGitStatusTracking(taskId: string): void {
+  clearGitStatusStaleTimer(taskId);
+  gitRefreshVersions.delete(taskId);
+}
+
+async function refreshTaskGitStatus(
+  taskId: string,
+  options: { invalidateExisting?: boolean } = {},
+): Promise<void> {
   const task = store.tasks[taskId];
   if (!task || task.gitIsolation === 'none') return;
+  const version = nextGitRefreshVersion(taskId);
+
+  if (options.invalidateExisting) {
+    clearGitStatusStaleTimer(taskId);
+    const previous = store.taskGitStatus[taskId];
+    setStore(
+      'taskGitStatus',
+      taskId,
+      previous
+        ? { ...previous, refreshing: true, stale: false }
+        : {
+            has_committed_changes: false,
+            has_uncommitted_changes: false,
+            current_branch: null,
+            refreshedAt: 0,
+            refreshing: true,
+          },
+    );
+  }
 
   try {
     const status = await invoke<WorktreeStatus>(IPC.GetWorktreeStatus, {
       worktreePath: task.worktreePath,
       baseBranch: task.baseBranch,
     });
-    setStore('taskGitStatus', taskId, status);
-  } catch {
-    // Worktree may not exist yet or was removed — ignore
+    if (!store.tasks[taskId] || !isCurrentGitRefresh(taskId, version)) return;
+    const refreshedAt = Date.now();
+    const next: TaskGitStatusSnapshot = {
+      ...status,
+      refreshedAt,
+    };
+    setStore('taskGitStatus', taskId, next);
+    scheduleGitStatusStaleTimer(taskId, refreshedAt);
+  } catch (err) {
+    if (!store.tasks[taskId] || !isCurrentGitRefresh(taskId, version)) return;
+    clearGitStatusStaleTimer(taskId);
+    const previous = store.taskGitStatus[taskId];
+    setStore(
+      'taskGitStatus',
+      taskId,
+      previous
+        ? {
+            ...previous,
+            refreshing: false,
+            error: gitStatusErrorMessage(err),
+          }
+        : {
+            has_committed_changes: false,
+            has_uncommitted_changes: false,
+            current_branch: null,
+            refreshedAt: 0,
+            refreshing: false,
+            error: gitStatusErrorMessage(err),
+          },
+    );
   }
 }
 
@@ -877,7 +983,7 @@ async function refreshActiveTaskGitStatus(): Promise<void> {
 
 /** Refresh git status for a single task (e.g. after agent exits). */
 export function refreshTaskStatus(taskId: string): void {
-  refreshTaskGitStatus(taskId);
+  refreshTaskGitStatus(taskId, { invalidateExisting: true });
 }
 
 let allTasksTimer: ReturnType<typeof setInterval> | null = null;

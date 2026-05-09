@@ -10,6 +10,7 @@ import {
   markAgentSpawned,
   markAgentBusy,
   clearAgentActivity,
+  clearTaskGitStatusTracking,
   isAgentIdle,
   rescheduleTaskStatusPolling,
 } from './taskStatus';
@@ -360,6 +361,7 @@ function removeTaskFromStore(taskId: string, agentIds: string[]): void {
 
   // Phase 2: actually delete after animation completes
   setTimeout(() => {
+    clearTaskGitStatusTracking(taskId);
     setStore(
       produce((s) => {
         delete s.tasks[taskId];

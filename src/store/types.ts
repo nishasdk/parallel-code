@@ -8,6 +8,13 @@ export type KeybindingOverride = Partial<Pick<KeyBinding, 'key' | 'modifiers'>> 
 
 export type GitIsolationMode = 'worktree' | 'direct' | 'none';
 
+export interface TaskGitStatusSnapshot extends WorktreeStatus {
+  refreshedAt: number;
+  error?: string;
+  refreshing?: boolean;
+  stale?: boolean;
+}
+
 export type TaskViewportVisibility = 'visible' | 'offscreen-left' | 'offscreen-right';
 
 export interface TerminalBookmark {
@@ -200,7 +207,7 @@ export interface AppStore {
    *  flex-absorbing. */
   panelUserSize: Record<string, number>;
   globalScale: number;
-  taskGitStatus: Record<string, WorktreeStatus>;
+  taskGitStatus: Record<string, TaskGitStatusSnapshot>;
   taskViewportVisibility: Record<string, TaskViewportVisibility>;
   focusedPanel: Record<string, PanelId>;
   sidebarFocused: boolean;

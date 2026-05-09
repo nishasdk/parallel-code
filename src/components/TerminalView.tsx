@@ -83,10 +83,6 @@ interface TerminalViewProps {
   isFocused?: boolean;
 }
 
-// Status parsing only needs recent output. Capping forwarded bytes avoids
-// expensive full-chunk decoding during large terminal bursts.
-const STATUS_ANALYSIS_MAX_BYTES = 8 * 1024;
-
 /** Terminal-layer bindings — filtered from resolved bindings.
  *  Called in the key handler (hot path); resolveBindings walks the full
  *  defaults list on each call, which is fine at human typing speed. */
@@ -416,11 +412,6 @@ export function TerminalView(props: TerminalViewProps) {
         }
       }
 
-      const statusPayload =
-        payload.length > STATUS_ANALYSIS_MAX_BYTES
-          ? payload.subarray(payload.length - STATUS_ANALYSIS_MAX_BYTES)
-          : payload;
-
       outputWriteInFlight = true;
       // eslint-disable-next-line solid/reactivity -- write callback is not a reactive context
       term.write(payload, () => {
@@ -436,7 +427,6 @@ export function TerminalView(props: TerminalViewProps) {
           });
         }
 
-        props.onData?.(statusPayload);
         if (outputQueue.length > 0) {
           scheduleOutputFlush();
           return;
@@ -458,6 +448,9 @@ export function TerminalView(props: TerminalViewProps) {
     }
 
     function enqueueOutput(chunk: Uint8Array) {
+      // Status analysis runs before xterm rendering/backpressure and receives
+      // full chunks so UTF-8 decoder state stays valid across PTY boundaries.
+      props.onData?.(chunk);
       outputQueue.push(chunk);
       outputQueuedBytes += chunk.length;
       watermark += chunk.length;

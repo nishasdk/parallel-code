@@ -56,6 +56,7 @@ import {
   isAutoTrustSettling,
   isAgentAskingQuestion,
   getTaskAttentionState,
+  getTaskDotStatus,
   taskNeedsAttention,
   markAgentSpawned,
   markAgentOutput,
@@ -528,12 +529,83 @@ describe('task attention state', () => {
   it('returns ready for committed clean tasks without active attention', () => {
     setMockTask('task-1', { agentIds: ['agent-1'] });
     setMockAgent('agent-1', { status: 'running' });
+    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'));
     mockTaskGitStatus['task-1'] = {
       has_committed_changes: true,
       has_uncommitted_changes: false,
+      current_branch: 'task/example',
+      refreshedAt: Date.now(),
     };
 
     expect(getTaskAttentionState('task-1')).toBe('ready');
+    expect(getTaskDotStatus('task-1')).toBe('ready');
+    expect(taskNeedsAttention('task-1')).toBe(false);
+  });
+
+  it('does not report ready from a stale git status snapshot', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'));
+    mockTaskGitStatus['task-1'] = {
+      has_committed_changes: true,
+      has_uncommitted_changes: false,
+      current_branch: 'task/example',
+      refreshedAt: Date.now() - 6 * 60_000,
+    };
+
+    expect(getTaskAttentionState('task-1')).toBe('idle');
+    expect(getTaskDotStatus('task-1')).toBe('waiting');
+    expect(taskNeedsAttention('task-1')).toBe(false);
+  });
+
+  it('does not report ready from a failed git status refresh', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'));
+    mockTaskGitStatus['task-1'] = {
+      has_committed_changes: true,
+      has_uncommitted_changes: false,
+      current_branch: 'task/example',
+      refreshedAt: Date.now(),
+      error: 'worktree missing',
+    };
+
+    expect(getTaskAttentionState('task-1')).toBe('idle');
+    expect(getTaskDotStatus('task-1')).toBe('waiting');
+    expect(taskNeedsAttention('task-1')).toBe(false);
+  });
+
+  it('does not report ready while a git status refresh is pending', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'));
+    mockTaskGitStatus['task-1'] = {
+      has_committed_changes: true,
+      has_uncommitted_changes: false,
+      current_branch: 'task/example',
+      refreshedAt: Date.now(),
+      refreshing: true,
+    };
+
+    expect(getTaskAttentionState('task-1')).toBe('idle');
+    expect(getTaskDotStatus('task-1')).toBe('waiting');
+    expect(taskNeedsAttention('task-1')).toBe(false);
+  });
+
+  it('does not report ready after a git status snapshot has been marked stale', () => {
+    setMockTask('task-1', { agentIds: ['agent-1'] });
+    setMockAgent('agent-1', { status: 'running' });
+    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'));
+    mockTaskGitStatus['task-1'] = {
+      has_committed_changes: true,
+      has_uncommitted_changes: false,
+      current_branch: 'task/example',
+      refreshedAt: Date.now(),
+      stale: true,
+    };
+
+    expect(getTaskAttentionState('task-1')).toBe('idle');
+    expect(getTaskDotStatus('task-1')).toBe('waiting');
     expect(taskNeedsAttention('task-1')).toBe(false);
   });
 
