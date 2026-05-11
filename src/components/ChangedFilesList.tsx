@@ -284,7 +284,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
 
   // Falls back to branch-based diff when worktree path doesn't exist.
   // When selectedCommit is a hash, fetches files for that single commit (no polling).
-  // When selectedCommit is the uncommitted sentinel, fetches all changes and filters.
+  // When selectedCommit is the uncommitted sentinel, fetches HEAD-to-working-tree changes.
   // Always runs an initial fetch on mount/input change so non-active tasks have
   // populated data — CommitNavBar buttons stopPropagation, so navigating there
   // wouldn't otherwise activate the task and trigger a fetch. Polling at 5s
@@ -320,6 +320,18 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
           return;
         }
 
+        if (uncommittedOnly && path) {
+          try {
+            const result = await invoke<ChangedFile[]>(IPC.GetUncommittedChangedFiles, {
+              worktreePath: path,
+            });
+            if (!cancelled) setFiles(result);
+          } catch {
+            if (!cancelled) setFiles([]);
+          }
+          return;
+        }
+
         // Try worktree-based fetch first
         if (path && !usingBranchFallback) {
           try {
@@ -327,9 +339,7 @@ export function ChangedFilesList(props: ChangedFilesListProps) {
               worktreePath: path,
               baseBranch,
             });
-            if (!cancelled) {
-              setFiles(uncommittedOnly ? result.filter((f) => !f.committed) : result);
-            }
+            if (!cancelled) setFiles(result);
             return;
           } catch {
             // Worktree may not exist — try branch fallback below

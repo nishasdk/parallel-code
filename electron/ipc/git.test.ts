@@ -57,6 +57,7 @@ import {
   getChangedFiles,
   getAllFileDiffs,
   getFileDiff,
+  getUncommittedChangedFiles,
   checkMergeStatus,
 } from './git.js';
 
@@ -532,6 +533,7 @@ function buildWorktreeMockHandler(opts: {
       args.includes('--raw') &&
       args.includes('--numstat') &&
       !args.some((arg) => arg.includes('...')) &&
+      !args.includes(HEAD_HASH) &&
       singlePointRawNumstatCalls++ === 0
     ) {
       const fallback = [opts.committedRawNumstat, opts.uncommittedRawNumstat]
@@ -1123,6 +1125,84 @@ describe('getFileDiff (worktree-based, merge-base diff)', () => {
     expect(result.diff).toContain('@@ -0,0 +1,2 @@');
     expect(result.diff).toContain('+one\n+two\n');
     expect(result.diff).not.toContain('+two\n+\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getUncommittedChangedFiles — HEAD-to-working-tree file stats
+// ---------------------------------------------------------------------------
+
+describe('getUncommittedChangedFiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reports tracked local edits with HEAD-to-working-tree line counts', async () => {
+    const calls: string[][] = [];
+    setupMock(
+      calls,
+      buildWorktreeMockHandler({
+        finalRawNumstat: rawNumstatEntry('dirty.ts', 7, 2),
+        uncommittedRawNumstat: rawNumstatEntry('dirty.ts', 10, 9),
+      }),
+    );
+
+    const files = await getUncommittedChangedFiles(uniqueWorktreePath());
+
+    expect(files).toEqual([
+      {
+        path: 'dirty.ts',
+        lines_added: 10,
+        lines_removed: 9,
+        status: 'M',
+        committed: false,
+      },
+    ]);
+  });
+
+  it('reports local reverts even when the final merge-base diff would be empty', async () => {
+    const calls: string[][] = [];
+    setupMock(
+      calls,
+      buildWorktreeMockHandler({
+        finalRawNumstat: '',
+        uncommittedRawNumstat: rawNumstatEntry('reverted-to-base.ts', 4, 4),
+      }),
+    );
+
+    const files = await getUncommittedChangedFiles(uniqueWorktreePath());
+
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe('reverted-to-base.ts');
+    expect(files[0].lines_added).toBe(4);
+    expect(files[0].lines_removed).toBe(4);
+  });
+
+  it('includes untracked files with added line counts', async () => {
+    const calls: string[][] = [];
+    setupMock(
+      calls,
+      buildWorktreeMockHandler({
+        untrackedFiles: 'new-file.ts\n',
+      }),
+    );
+    vi.mocked(fs.promises.stat).mockResolvedValueOnce({
+      isFile: () => true,
+      size: 100,
+    } as unknown as Awaited<ReturnType<typeof fs.promises.stat>>);
+    vi.mocked(fs.promises.readFile).mockResolvedValueOnce('one\ntwo\n');
+
+    const files = await getUncommittedChangedFiles(uniqueWorktreePath());
+
+    expect(files).toEqual([
+      {
+        path: 'new-file.ts',
+        lines_added: 2,
+        lines_removed: 0,
+        status: '?',
+        committed: false,
+      },
+    ]);
   });
 });
 

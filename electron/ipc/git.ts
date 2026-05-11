@@ -1124,6 +1124,44 @@ async function buildUntrackedPseudoDiffs(worktreePath: string): Promise<string[]
   return parts;
 }
 
+async function getUntrackedChangedFiles(
+  worktreePath: string,
+  seen: Set<string> = new Set(),
+): Promise<ChangedFile[]> {
+  let stdout = '';
+  try {
+    const result = await exec('git', ['ls-files', '--others', '--exclude-standard'], {
+      cwd: worktreePath,
+      maxBuffer: MAX_BUFFER,
+    });
+    stdout = result.stdout;
+  } catch {
+    return [];
+  }
+
+  const files: ChangedFile[] = [];
+  for (const line of stdout.split('\n')) {
+    const p = normalizeStatusPath(line);
+    if (!p || seen.has(p)) continue;
+    seen.add(p);
+
+    let added = 0;
+    const fullPath = path.join(worktreePath, p);
+    try {
+      const stat = await fs.promises.stat(fullPath);
+      if (stat.isFile() && stat.size < MAX_BUFFER) {
+        const content = await fs.promises.readFile(fullPath, 'utf8');
+        added = splitContentLines(content).length;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    files.push({ path: p, lines_added: added, lines_removed: 0, status: '?', committed: false });
+  }
+  return files;
+}
+
 export async function getAllFileDiffs(worktreePath: string, baseBranch?: string): Promise<string> {
   const headHash = await pinHead(worktreePath);
 
@@ -1170,6 +1208,40 @@ export async function getUncommittedFileDiffs(worktreePath: string): Promise<str
   const untrackedParts = await buildUntrackedPseudoDiffs(worktreePath);
   const parts = [combinedDiff, untrackedParts.join('')].filter((p) => p.length > 0);
   return parts.join('\n');
+}
+
+export async function getUncommittedChangedFiles(worktreePath: string): Promise<ChangedFile[]> {
+  const headHash = await pinHead(worktreePath);
+  let diffStr = '';
+  try {
+    const { stdout } = await exec('git', ['diff', '--raw', '--numstat', headHash], {
+      cwd: worktreePath,
+      maxBuffer: MAX_BUFFER,
+    });
+    diffStr = stdout;
+  } catch {
+    /* empty */
+  }
+
+  const { statusMap, numstatMap } = parseDiffRawNumstat(diffStr);
+  const files: ChangedFile[] = [];
+  const seen = new Set<string>();
+
+  for (const [p, [added, removed]] of numstatMap) {
+    const status = statusMap.get(p) ?? 'M';
+    seen.add(p);
+    files.push({ path: p, lines_added: added, lines_removed: removed, status, committed: false });
+  }
+
+  for (const [p, status] of statusMap) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    files.push({ path: p, lines_added: 0, lines_removed: 0, status, committed: false });
+  }
+
+  files.push(...(await getUntrackedChangedFiles(worktreePath, seen)));
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
 }
 
 export async function getAllFileDiffsFromBranch(

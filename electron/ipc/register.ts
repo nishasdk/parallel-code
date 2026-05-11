@@ -57,6 +57,7 @@ import {
   getBranchCommits,
   getCommitChangedFiles,
   getCommitDiffs,
+  getUncommittedChangedFiles,
   getUncommittedFileDiffs,
 } from './git.js';
 import { createTask, deleteTask } from './tasks.js';
@@ -379,6 +380,10 @@ export function registerAllHandlers(win: BrowserWindow): void {
     const baseBranch = args.baseBranch || undefined;
     if (baseBranch) validateBranchName(baseBranch, 'baseBranch');
     return getAllFileDiffs(args.worktreePath, baseBranch);
+  });
+  ipcMain.handle(IPC.GetUncommittedChangedFiles, (_e, args) => {
+    validatePath(args.worktreePath, 'worktreePath');
+    return getUncommittedChangedFiles(args.worktreePath);
   });
   ipcMain.handle(IPC.GetAllFileDiffsFromBranch, (_e, args) => {
     validatePath(args.projectRoot, 'projectRoot');
