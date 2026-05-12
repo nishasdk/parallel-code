@@ -34,9 +34,10 @@ interface PromptInputProps {
   taskId: string;
   agentId: string;
   initialPrompt?: string;
+  initialPromptAgentId?: string;
   prefillPrompt?: string;
   onPrefillConsumed?: () => void;
-  onSend?: (text: string) => void;
+  onSend?: (text: string, agentId: string) => void;
   ref?: (el: HTMLTextAreaElement) => void;
   handle?: (h: PromptInputHandle) => void;
 }
@@ -76,18 +77,38 @@ export function PromptInput(props: PromptInputProps) {
   const [sending, setSending] = createSignal(false);
   const [autoSentInitialPrompt, setAutoSentInitialPrompt] = createSignal<string | null>(null);
   let cleanupAutoSend: (() => void) | undefined;
+  let activeAutoSendKey: string | null = null;
+  let autoFilledInitialPrompt: string | null = null;
 
   createEffect(() => {
-    cleanupAutoSend?.();
-    cleanupAutoSend = undefined;
-
     const ip = props.initialPrompt?.trim();
-    if (!ip) return;
+    const initialPromptAgentId = props.initialPromptAgentId ?? props.agentId;
+    const inputOwnsInitialPrompt = initialPromptAgentId === props.agentId;
+    const autoSendKey = ip ? `${initialPromptAgentId}\0${ip}` : null;
 
-    setText(ip);
-    if (autoSentInitialPrompt() === ip) return;
+    if (activeAutoSendKey !== autoSendKey) {
+      cleanupAutoSend?.();
+      cleanupAutoSend = undefined;
+      activeAutoSendKey = autoSendKey;
+    }
 
-    const agentId = props.agentId;
+    if (!ip) {
+      if (autoFilledInitialPrompt && text() === autoFilledInitialPrompt) setText('');
+      autoFilledInitialPrompt = null;
+      return;
+    }
+
+    if (inputOwnsInitialPrompt) {
+      setText(ip);
+      autoFilledInitialPrompt = ip;
+    } else if (autoFilledInitialPrompt && text() === autoFilledInitialPrompt) {
+      setText('');
+      autoFilledInitialPrompt = null;
+    }
+
+    if (autoSentInitialPrompt() === autoSendKey || cleanupAutoSend) return;
+
+    const agentId = initialPromptAgentId;
     const spawnedAt = Date.now();
     let quiescenceTimer: number | undefined;
     let pendingSendTimer: ReturnType<typeof setTimeout> | undefined;
@@ -134,7 +155,7 @@ export function PromptInput(props: PromptInputProps) {
       // the quiescence timer needs to stay alive to retry after settling.
       if (isAutoTrustSettling(agentId)) return;
       cleanup();
-      void handleSend('auto');
+      void handleSend('auto', agentId, ip);
     }
 
     // --- FAST PATH: event from markAgentOutput ---
@@ -245,7 +266,7 @@ export function PromptInput(props: PromptInputProps) {
       // dialog with a ❯ selection cursor).  The stability check inside also guards,
       // but skipping here avoids scheduling unnecessary timers.
       if (/[❯›]/.test(stripAnsi(tail).slice(-PROMPT_MARKER_SCAN_CHARS))) {
-        if (!pendingSendTimer && !questionActive()) startStabilityChecks();
+        if (!pendingSendTimer && !isAgentAskingQuestion(agentId)) startStabilityChecks();
         return;
       }
 
@@ -325,6 +346,7 @@ export function PromptInput(props: PromptInputProps) {
   onCleanup(() => {
     cleanupAutoSend?.();
     cleanupAutoSend = undefined;
+    activeAutoSendKey = null;
     sendAbortController?.abort();
   });
 
@@ -352,18 +374,22 @@ export function PromptInput(props: PromptInputProps) {
 
   let sendAbortController: AbortController | undefined;
 
-  async function handleSend(mode: 'manual' | 'auto' = 'manual') {
+  async function handleSend(
+    mode: 'manual' | 'auto' = 'manual',
+    targetAgentId = props.agentId,
+    explicitText?: string,
+  ) {
     if (sending()) return;
     // Block sends while the agent is showing a question/dialog.
     // For auto-sends, use a fresh tail-buffer check instead of the reactive
     // signal — the signal may be stale (updated by throttled analysis) while
     // the callers (onReady, quiescence timer) already verified with fresh data.
     if (mode === 'auto') {
-      const tail = getAgentOutputTail(props.agentId);
+      const tail = getAgentOutputTail(targetAgentId);
       if (isQuestionBlockingAutoSend(tail)) {
         return;
       }
-      if (isAutoTrustSettling(props.agentId)) {
+      if (isAutoTrustSettling(targetAgentId)) {
         return;
       }
     } else {
@@ -375,13 +401,17 @@ export function PromptInput(props: PromptInputProps) {
       // accepts it (the \r from sendPrompt would confirm the TUI selection).
       if (isAutoTrustSettling(props.agentId)) return;
     }
-    cleanupAutoSend?.();
-    cleanupAutoSend = undefined;
+    const queuedInitialPromptAgentId = props.initialPromptAgentId ?? props.agentId;
+    if (mode === 'auto' || targetAgentId === queuedInitialPromptAgentId) {
+      cleanupAutoSend?.();
+      cleanupAutoSend = undefined;
+      activeAutoSendKey = null;
+    }
 
-    const val = text().trim();
+    const val = (explicitText ?? text()).trim();
     if (!val) {
       if (mode === 'auto') return;
-      fireAndForget(IPC.WriteToAgent, { agentId: props.agentId, data: '\r' });
+      fireAndForget(IPC.WriteToAgent, { agentId: targetAgentId, data: '\r' });
       setTaskLastInputAt(props.taskId);
       return;
     }
@@ -393,21 +423,24 @@ export function PromptInput(props: PromptInputProps) {
     setSending(true);
     try {
       // Snapshot tail before send for verification comparison.
-      const preSendTail = getAgentOutputTail(props.agentId);
-      await sendPrompt(props.taskId, props.agentId, val);
+      const preSendTail = getAgentOutputTail(targetAgentId);
+      await sendPrompt(props.taskId, targetAgentId, val);
 
       if (mode === 'auto') {
         // Wait for the prompt to appear in output before clearing the text field.
-        await promptAppearedInOutput(props.agentId, val, preSendTail, signal);
+        await promptAppearedInOutput(targetAgentId, val, preSendTail, signal);
       }
 
       if (signal.aborted) return;
 
-      if (props.initialPrompt?.trim()) {
-        setAutoSentInitialPrompt(props.initialPrompt.trim());
+      if (mode === 'auto' && props.initialPrompt?.trim()) {
+        setAutoSentInitialPrompt(`${targetAgentId}\0${props.initialPrompt.trim()}`);
       }
-      props.onSend?.(val);
-      setText('');
+      props.onSend?.(val, targetAgentId);
+      if (targetAgentId === props.agentId) {
+        autoFilledInitialPrompt = null;
+        setText('');
+      }
     } catch (e) {
       console.error('Failed to send prompt:', e);
     } finally {
@@ -431,7 +464,13 @@ export function PromptInput(props: PromptInputProps) {
           rows={3}
           value={text()}
           disabled={questionActive()}
-          onInput={(e) => setText(e.currentTarget.value)}
+          onInput={(e) => {
+            const next = e.currentTarget.value;
+            setText(next);
+            if (autoFilledInitialPrompt && next !== autoFilledInitialPrompt) {
+              autoFilledInitialPrompt = null;
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();

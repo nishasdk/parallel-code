@@ -389,6 +389,69 @@ describe('spawnAgent docker mode', () => {
   });
 });
 
+describe('spawnAgent session reattach', () => {
+  it('reuses an existing PTY session and moves live output to the new channel', () => {
+    const win = createMockWindow();
+    const agentId = 'agent-reattach';
+    const args = buildSpawnArgs({
+      agentId,
+      command: 'claude',
+      args: [],
+      dockerMode: false,
+      onOutput: { __CHANNEL_ID__: 'channel-1' },
+    });
+
+    spawnAgent(win, args);
+    const proc = mockPtySpawn.mock.results[0].value as ReturnType<typeof mockPtySpawn>;
+    proc.emitData('before reload');
+
+    spawnAgent(win, {
+      ...args,
+      cols: 90,
+      rows: 30,
+      attachExisting: true,
+      onOutput: { __CHANNEL_ID__: 'channel-2' },
+    });
+    proc.emitData('after reload');
+
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+    expect(proc.resume).toHaveBeenCalled();
+    expect(proc.resize).toHaveBeenCalledWith(90, 30);
+    expect(win.webContents.send).toHaveBeenCalledWith('channel:channel-2', {
+      type: 'Data',
+      data: Buffer.from('before reload', 'utf8').toString('base64'),
+    });
+    expect(win.webContents.send).toHaveBeenLastCalledWith('channel:channel-2', {
+      type: 'Data',
+      data: Buffer.from('after reload', 'utf8').toString('base64'),
+    });
+  });
+
+  it('reattaches before validating the launch command', () => {
+    const win = createMockWindow();
+    const agentId = 'agent-reattach-missing-command';
+    const args = buildSpawnArgs({
+      agentId,
+      command: 'claude',
+      args: [],
+      dockerMode: false,
+      onOutput: { __CHANNEL_ID__: 'channel-1' },
+    });
+
+    spawnAgent(win, args);
+
+    expect(() =>
+      spawnAgent(win, {
+        ...args,
+        command: 'nonexistent-binary-xyz',
+        attachExisting: true,
+        onOutput: { __CHANNEL_ID__: 'channel-2' },
+      }),
+    ).not.toThrow();
+    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('validateCommand', () => {
   it('does not throw for a command found in PATH', () => {
     expect(() => validateCommand('/bin/sh')).not.toThrow();

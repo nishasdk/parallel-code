@@ -52,6 +52,20 @@ export function MergeDialog(props: MergeDialogProps) {
   const hasConflicts = () => (mergeStatus()?.conflicting_files.length ?? 0) > 0;
   const hasCommittedChangesToMerge = () => worktreeStatus()?.has_committed_changes ?? false;
   const baseBranchName = () => props.task.baseBranch ?? mergeStatus()?.base_branch ?? 'main';
+  const selectedAgentId = () => {
+    const selected = props.task.selectedAgentId;
+    if (
+      props.task.id !== store.activeTaskId &&
+      selected &&
+      props.task.agentIds.includes(selected)
+    ) {
+      return selected;
+    }
+    const active = store.activeAgentId;
+    if (active && props.task.agentIds.includes(active)) return active;
+    if (selected && props.task.agentIds.includes(selected)) return selected;
+    return props.task.agentIds[0];
+  };
   const hasBranchMismatch = () => {
     const status = worktreeStatus();
     if (!status) return false;
@@ -272,13 +286,13 @@ export function MergeDialog(props: MergeDialogProps) {
                   <Show
                     when={
                       props.task.agentIds.length > 0 &&
-                      store.agents[props.task.agentIds[0]]?.status === 'running'
+                      store.agents[selectedAgentId()]?.status === 'running'
                     }
                   >
                     <button
                       type="button"
                       onClick={() => {
-                        const agentId = props.task.agentIds[0];
+                        const agentId = selectedAgentId();
                         const base = baseBranchName();
                         props.onDone();
                         sendPrompt(props.task.id, agentId, `rebase on ${base} branch`).catch(

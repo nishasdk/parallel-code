@@ -19,6 +19,8 @@ import { DEFAULT_TERMINAL_FONT } from '../lib/fonts';
 import { isLookPreset } from '../lib/look';
 import { syncTerminalCounter } from './terminals';
 
+const RESTORED_AGENT_SPAWN_STAGGER_MS = 1_000;
+
 /** Enrich an agent def with resume/skip-permissions args from fresh defaults. */
 function enrichAgentDef(agentDef: AgentDef | null | undefined, availableAgents: AgentDef[]): void {
   if (!agentDef) return;
@@ -31,6 +33,53 @@ function enrichAgentDef(agentDef: AgentDef | null | undefined, availableAgents: 
   if (agentDef.id === 'codex' && agentDef.skip_permissions_args?.includes('--full-auto')) {
     agentDef.skip_permissions_args = ['--dangerously-bypass-approvals-and-sandbox'];
   }
+}
+
+function persistedAgentDefs(pt: PersistedTask, availableAgents: AgentDef[]): AgentDef[] {
+  const defs =
+    pt.agentDefs && pt.agentDefs.length > 0 ? pt.agentDefs : pt.agentDef ? [pt.agentDef] : [];
+  for (const def of defs) enrichAgentDef(def, availableAgents);
+  return defs;
+}
+
+function restoredAgentIds(pt: PersistedTask, count: number, used: Set<string>): string[] {
+  const persistedIds = Array.isArray(pt.agentIds) ? pt.agentIds : [];
+  return Array.from({ length: count }, (_, i) => {
+    const persistedId = persistedIds[i];
+    if (persistedId && !used.has(persistedId)) {
+      used.add(persistedId);
+      return persistedId;
+    }
+    const id = crypto.randomUUID();
+    used.add(id);
+    return id;
+  });
+}
+
+function restoredPromptedAgentIds(pt: PersistedTask, agentIds: string[]): string[] | undefined {
+  if (!Array.isArray(pt.promptedAgentIds)) return undefined;
+  const valid = pt.promptedAgentIds.filter(
+    (id): id is string => typeof id === 'string' && agentIds.includes(id),
+  );
+  return valid.length > 0 ? valid : undefined;
+}
+
+function validPromptedAgentIndexes(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const valid = value.filter(
+    (index): index is number => Number.isInteger(index) && index >= 0 && index < 100,
+  );
+  return valid.length > 0 ? valid : undefined;
+}
+
+function validAgentId(value: unknown, agentIds: string[]): string | undefined {
+  return typeof value === 'string' && agentIds.includes(value) ? value : undefined;
+}
+
+function validAgentIndex(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) < 100
+    ? (value as number)
+    : undefined;
 }
 
 export async function saveState(): Promise<void> {
@@ -76,7 +125,9 @@ export async function saveState(): Promise<void> {
     const task = store.tasks[taskId];
     if (!task) continue;
 
-    const firstAgent = task.agentIds[0] ? store.agents[task.agentIds[0]] : null;
+    const agentDefs = task.agentIds
+      .map((id) => store.agents[id]?.def)
+      .filter((def): def is AgentDef => Boolean(def));
 
     persisted.tasks[taskId] = {
       id: task.id,
@@ -87,8 +138,13 @@ export async function saveState(): Promise<void> {
       worktreePath: task.worktreePath,
       notes: task.notes,
       lastPrompt: task.lastPrompt,
+      promptedAgentIds: task.promptedAgentIds,
+      initialPrompt: task.initialPrompt,
       shellCount: task.shellAgentIds.length,
-      agentDef: firstAgent?.def ?? null,
+      agentDef: agentDefs[0] ?? null,
+      agentDefs: agentDefs.length > 1 ? agentDefs : undefined,
+      agentIds: task.agentIds.length > 0 ? [...task.agentIds] : undefined,
+      selectedAgentId: task.selectedAgentId,
       gitIsolation: task.gitIsolation,
       baseBranch: task.baseBranch,
       externalWorktree: task.externalWorktree,
@@ -98,6 +154,8 @@ export async function saveState(): Promise<void> {
       dockerImage: task.dockerImage,
       githubUrl: task.githubUrl,
       savedInitialPrompt: task.savedInitialPrompt,
+      savedSelectedAgentIndex: task.savedSelectedAgentIndex,
+      savedPromptedAgentIndexes: task.savedPromptedAgentIndexes,
       planFileName: task.planFileName,
       stepsEnabled: task.stepsEnabled,
     };
@@ -107,7 +165,14 @@ export async function saveState(): Promise<void> {
     const task = store.tasks[taskId];
     if (!task) continue;
 
-    const firstAgent = task.agentIds[0] ? store.agents[task.agentIds[0]] : null;
+    const agentDefs =
+      task.savedAgentDefs && task.savedAgentDefs.length > 0
+        ? task.savedAgentDefs
+        : task.savedAgentDef
+          ? [task.savedAgentDef]
+          : task.agentIds
+              .map((id) => store.agents[id]?.def)
+              .filter((def): def is AgentDef => Boolean(def));
 
     persisted.tasks[taskId] = {
       id: task.id,
@@ -118,8 +183,13 @@ export async function saveState(): Promise<void> {
       worktreePath: task.worktreePath,
       notes: task.notes,
       lastPrompt: task.lastPrompt,
+      promptedAgentIds: task.promptedAgentIds,
+      initialPrompt: task.initialPrompt,
       shellCount: task.shellAgentIds.length,
-      agentDef: firstAgent?.def ?? task.savedAgentDef ?? null,
+      agentDef: agentDefs[0] ?? null,
+      agentDefs: agentDefs.length > 1 ? agentDefs : undefined,
+      agentIds: task.agentIds.length > 0 ? [...task.agentIds] : undefined,
+      selectedAgentId: task.selectedAgentId,
       gitIsolation: task.gitIsolation,
       baseBranch: task.baseBranch,
       externalWorktree: task.externalWorktree,
@@ -129,6 +199,8 @@ export async function saveState(): Promise<void> {
       dockerImage: task.dockerImage,
       githubUrl: task.githubUrl,
       savedInitialPrompt: task.savedInitialPrompt,
+      savedSelectedAgentIndex: task.savedSelectedAgentIndex,
+      savedPromptedAgentIndexes: task.savedPromptedAgentIndexes,
       planFileName: task.planFileName,
       stepsEnabled: task.stepsEnabled,
       collapsed: true,
@@ -324,6 +396,7 @@ export async function loadState(): Promise<void> {
   }
 
   const restoredRunningAgentIds: string[] = [];
+  const usedRestoredAgentIds = new Set<string>();
   const today = getLocalDateKey();
 
   setStore(
@@ -435,10 +508,8 @@ export async function loadState(): Promise<void> {
         const pt = raw.tasks[taskId];
         if (!pt) continue;
 
-        const agentId = crypto.randomUUID();
-        const agentDef = pt.agentDef;
-
-        enrichAgentDef(agentDef, s.availableAgents);
+        const agentDefs = persistedAgentDefs(pt, s.availableAgents);
+        const agentIds = restoredAgentIds(pt, agentDefs.length, usedRestoredAgentIds);
 
         const shellAgentIds: string[] = [];
         for (let i = 0; i < pt.shellCount; i++) {
@@ -458,10 +529,13 @@ export async function loadState(): Promise<void> {
           projectId: pt.projectId ?? '',
           branchName: pt.branchName,
           worktreePath: pt.worktreePath,
-          agentIds: agentDef ? [agentId] : [],
+          agentIds,
+          selectedAgentId: validAgentId(pt.selectedAgentId, agentIds) ?? agentIds[0],
           shellAgentIds,
           notes: pt.notes,
           lastPrompt: pt.lastPrompt,
+          promptedAgentIds: restoredPromptedAgentIds(pt, agentIds),
+          initialPrompt: typeof pt.initialPrompt === 'string' ? pt.initialPrompt : undefined,
           gitIsolation: legacy.gitIsolation ?? (legacy.directMode ? 'direct' : 'worktree'),
           baseBranch: legacy.baseBranch || undefined,
           externalWorktree: pt.externalWorktree,
@@ -475,13 +549,17 @@ export async function loadState(): Promise<void> {
           dockerImage: typeof pt.dockerImage === 'string' ? pt.dockerImage : undefined,
           githubUrl: pt.githubUrl,
           savedInitialPrompt: pt.savedInitialPrompt,
+          savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
+          savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
           stepsEnabled: pt.stepsEnabled,
         };
 
         s.tasks[taskId] = task;
 
-        if (agentDef) {
+        for (let i = 0; i < agentDefs.length; i++) {
+          const agentId = agentIds[i];
+          const agentDef = agentDefs[i];
           const agent: Agent = {
             id: agentId,
             taskId,
@@ -492,6 +570,9 @@ export async function loadState(): Promise<void> {
             signal: null,
             lastOutput: [],
             generation: 0,
+            spawnDelayMs:
+              agentDefs.length > 1 && i > 0 ? i * RESTORED_AGENT_SPAWN_STAGGER_MS : undefined,
+            attachExisting: true,
           };
           s.agents[agentId] = agent;
           restoredRunningAgentIds.push(agentId);
@@ -516,8 +597,7 @@ export async function loadState(): Promise<void> {
         const pt = raw.tasks[taskId];
         if (!pt || !pt.collapsed) continue;
 
-        const agentDef = pt.agentDef;
-        enrichAgentDef(agentDef, s.availableAgents);
+        const agentDefs = persistedAgentDefs(pt, s.availableAgents);
 
         const legacyCollapsed = pt as PersistedTask & { directMode?: boolean };
         const task: Task = {
@@ -533,9 +613,12 @@ export async function loadState(): Promise<void> {
           branchName: pt.branchName,
           worktreePath: pt.worktreePath,
           agentIds: [],
+          selectedAgentId: undefined,
           shellAgentIds: [],
           notes: pt.notes,
           lastPrompt: pt.lastPrompt,
+          promptedAgentIds: restoredPromptedAgentIds(pt, []),
+          initialPrompt: typeof pt.initialPrompt === 'string' ? pt.initialPrompt : undefined,
           gitIsolation:
             legacyCollapsed.gitIsolation ?? (legacyCollapsed.directMode ? 'direct' : 'worktree'),
           baseBranch: legacyCollapsed.baseBranch || undefined,
@@ -550,10 +633,13 @@ export async function loadState(): Promise<void> {
           dockerImage: typeof pt.dockerImage === 'string' ? pt.dockerImage : undefined,
           githubUrl: pt.githubUrl,
           savedInitialPrompt: pt.savedInitialPrompt,
+          savedSelectedAgentIndex: validAgentIndex(pt.savedSelectedAgentIndex),
+          savedPromptedAgentIndexes: validPromptedAgentIndexes(pt.savedPromptedAgentIndexes),
           planFileName: pt.planFileName,
           stepsEnabled: pt.stepsEnabled,
           collapsed: true,
-          savedAgentDef: agentDef ?? undefined,
+          savedAgentDef: agentDefs[0],
+          savedAgentDefs: agentDefs.length > 0 ? agentDefs : undefined,
         };
 
         s.tasks[taskId] = task;
@@ -578,7 +664,11 @@ export async function loadState(): Promise<void> {
 
       // Set activeAgentId from the active task
       if (s.activeTaskId && s.tasks[s.activeTaskId]) {
-        s.activeAgentId = s.tasks[s.activeTaskId].agentIds[0] ?? null;
+        const task = s.tasks[s.activeTaskId];
+        s.activeAgentId =
+          task.selectedAgentId && task.agentIds.includes(task.selectedAgentId)
+            ? task.selectedAgentId
+            : (task.agentIds[0] ?? null);
       }
     }),
   );

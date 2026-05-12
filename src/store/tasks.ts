@@ -190,6 +190,7 @@ export async function createTask(opts: CreateTaskOptions): Promise<string> {
     branchName,
     worktreePath,
     agentIds: [agentId],
+    selectedAgentId: agentId,
     shellAgentIds: [],
     notes: '',
     lastPrompt: '',
@@ -261,6 +262,7 @@ export async function createImportedTask(opts: CreateImportedTaskOptions): Promi
     branchName: worktree.branch_name,
     worktreePath: worktree.path,
     agentIds: [agentId],
+    selectedAgentId: agentId,
     shellAgentIds: [],
     notes: '',
     lastPrompt: '',
@@ -341,6 +343,7 @@ export async function retryCloseTask(taskId: string): Promise<void> {
 }
 
 const REMOVE_ANIMATION_MS = 300;
+const RESTORED_AGENT_SPAWN_STAGGER_MS = 1_000;
 
 function removeTaskFromStore(taskId: string, agentIds: string[]): void {
   recordTaskCompleted();
@@ -384,7 +387,12 @@ function removeTaskFromStore(taskId: string, agentIds: string[]): void {
         if (s.activeTaskId === taskId) {
           s.activeTaskId = neighbor;
           const neighborTask = neighbor ? s.tasks[neighbor] : null;
-          s.activeAgentId = neighborTask?.agentIds[0] ?? null;
+          s.activeAgentId = neighborTask
+            ? neighborTask.selectedAgentId &&
+              neighborTask.agentIds.includes(neighborTask.selectedAgentId)
+              ? neighborTask.selectedAgentId
+              : (neighborTask.agentIds[0] ?? null)
+            : null;
         }
 
         for (const agentId of agentIds) {
@@ -467,11 +475,15 @@ export function updateTaskNotes(taskId: string, notes: string): void {
 
 export async function sendPrompt(taskId: string, agentId: string, text: string): Promise<void> {
   const task = store.tasks[taskId];
+  const promptedAgentIds = task?.promptedAgentIds ?? [];
+  const hasPromptedAgent = promptedAgentIds.includes(agentId);
+  const isQueuedInitialPrompt =
+    agentId === task?.agentIds[0] && task?.initialPrompt?.trim() === text.trim();
 
   // When steps tracking is enabled but no initial prompt was provided in the dialog,
-  // the steps instruction was never injected in createTask.  Append it to the first
-  // prompt the user sends so the agent still knows to maintain steps.json.
-  const injectSteps = !!(task?.stepsEnabled && !task?.lastPrompt && !task?.initialPrompt);
+  // the steps instruction was never injected in createTask. Append it to each
+  // agent's first manual prompt so newly added agents also maintain steps.json.
+  const injectSteps = !!(task?.stepsEnabled && !hasPromptedAgent && !isQueuedInitialPrompt);
   const effectiveText = injectSteps ? `${text}\n\n---\n${STEPS_INSTRUCTION}` : text;
 
   // Send a Focus In escape sequence before the prompt text.  When the user focuses
@@ -493,6 +505,11 @@ export async function sendPrompt(taskId: string, agentId: string, text: string):
   await new Promise((r) => setTimeout(r, 50));
   await writeToAgentWhenReady(agentId, '\r');
   setStore('tasks', taskId, 'lastPrompt', text);
+  if (task && !hasPromptedAgent) {
+    setStore('tasks', taskId, 'promptedAgentIds', [...promptedAgentIds, agentId]);
+    if (isQueuedInitialPrompt) setStore('tasks', taskId, 'initialPrompt', undefined);
+    void saveState();
+  }
 }
 
 export function setLastPrompt(taskId: string, text: string): void {
@@ -611,10 +628,16 @@ export async function collapseTask(taskId: string): Promise<void> {
   // Save agent def before killing so uncollapse can restart cleanly.
   // Collapsing unmounts the TaskPanel which destroys the TerminalView,
   // so agents must be killed explicitly to avoid orphaned PTY processes.
-  const firstAgent = task.agentIds[0] ? store.agents[task.agentIds[0]] : null;
-  const agentDef = firstAgent?.def;
   const agentIds = [...task.agentIds];
   const shellAgentIds = [...task.shellAgentIds];
+  const agentDefs = agentIds
+    .map((id) => store.agents[id]?.def)
+    .filter((def): def is AgentDef => Boolean(def));
+  const promptedAgentIds = new Set(task.promptedAgentIds ?? []);
+  const promptedAgentIndexes = agentIds
+    .map((id, index) => (promptedAgentIds.has(id) ? index : -1))
+    .filter((index) => index !== -1);
+  const selectedAgentIndex = agentIds.indexOf(task.selectedAgentId ?? store.activeAgentId ?? '');
   const allIds = [...agentIds, ...shellAgentIds];
   await Promise.allSettled(
     allIds.map((id) => invoke(IPC.KillAgent, { agentId: id }).catch(console.error)),
@@ -625,7 +648,14 @@ export async function collapseTask(taskId: string): Promise<void> {
     produce((s) => {
       if (!s.tasks[taskId]) return;
       s.tasks[taskId].collapsed = true;
-      s.tasks[taskId].savedAgentDef = agentDef;
+      s.tasks[taskId].savedAgentDef = agentDefs[0];
+      s.tasks[taskId].savedAgentDefs = agentDefs.length > 0 ? agentDefs : undefined;
+      s.tasks[taskId].savedSelectedAgentIndex =
+        selectedAgentIndex >= 0 ? selectedAgentIndex : undefined;
+      s.tasks[taskId].savedPromptedAgentIndexes =
+        promptedAgentIndexes.length > 0 ? promptedAgentIndexes : undefined;
+      s.tasks[taskId].selectedAgentId = undefined;
+      s.tasks[taskId].promptedAgentIds = undefined;
       s.tasks[taskId].agentIds = [];
       s.tasks[taskId].shellAgentIds = [];
       const idx = s.taskOrder.indexOf(taskId);
@@ -642,7 +672,12 @@ export async function collapseTask(taskId: string): Promise<void> {
         const neighbor = s.taskOrder[Math.max(0, idx - 1)] ?? null;
         s.activeTaskId = neighbor;
         const neighborTask = neighbor ? s.tasks[neighbor] : null;
-        s.activeAgentId = neighborTask?.agentIds[0] ?? null;
+        s.activeAgentId = neighborTask
+          ? neighborTask.selectedAgentId &&
+            neighborTask.agentIds.includes(neighborTask.selectedAgentId)
+            ? neighborTask.selectedAgentId
+            : (neighborTask.agentIds[0] ?? null)
+          : null;
       }
     }),
   );
@@ -654,8 +689,15 @@ export function uncollapseTask(taskId: string): void {
   const task = store.tasks[taskId];
   if (!task || !task.collapsed) return;
 
-  const savedDef = task.savedAgentDef;
-  const agentId = savedDef ? crypto.randomUUID() : null;
+  const savedDefs =
+    task.savedAgentDefs && task.savedAgentDefs.length > 0
+      ? task.savedAgentDefs
+      : task.savedAgentDef
+        ? [task.savedAgentDef]
+        : [];
+  const restoredAgents = savedDefs.map((def) => ({ id: crypto.randomUUID(), def }));
+  const selectedAgentIndex = task.savedSelectedAgentIndex ?? 0;
+  const promptedAgentIndexes = task.savedPromptedAgentIndexes ?? [];
 
   setStore(
     produce((s) => {
@@ -665,29 +707,40 @@ export function uncollapseTask(taskId: string): void {
       s.taskOrder.push(taskId);
       s.activeTaskId = taskId;
 
-      if (agentId && savedDef) {
+      for (let i = 0; i < restoredAgents.length; i++) {
+        const { id: agentId, def } = restoredAgents[i];
         const agent: Agent = {
           id: agentId,
           taskId,
-          def: savedDef,
+          def,
           resumed: true,
           status: 'running',
           exitCode: null,
           signal: null,
           lastOutput: [],
           generation: 0,
+          spawnDelayMs:
+            restoredAgents.length > 1 && i > 0 ? i * RESTORED_AGENT_SPAWN_STAGGER_MS : undefined,
         };
         s.agents[agentId] = agent;
-        t.agentIds = [agentId];
-        t.savedAgentDef = undefined;
       }
 
-      s.activeAgentId = t.agentIds[0] ?? null;
+      t.agentIds = restoredAgents.map((agent) => agent.id);
+      const promptedAgentIds = promptedAgentIndexes
+        .map((index) => t.agentIds[index])
+        .filter((id): id is string => Boolean(id));
+      t.promptedAgentIds = promptedAgentIds.length > 0 ? promptedAgentIds : undefined;
+      t.selectedAgentId = t.agentIds[selectedAgentIndex] ?? t.agentIds[0];
+      t.savedAgentDef = undefined;
+      t.savedAgentDefs = undefined;
+      t.savedSelectedAgentIndex = undefined;
+      t.savedPromptedAgentIndexes = undefined;
+      s.activeAgentId = t.selectedAgentId ?? null;
     }),
   );
 
-  if (agentId) {
-    markAgentSpawned(agentId);
+  if (restoredAgents.length > 0) {
+    for (const { id } of restoredAgents) markAgentSpawned(id);
     rescheduleTaskStatusPolling();
   }
 }

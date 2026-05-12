@@ -60,7 +60,15 @@ export async function closeTerminal(terminalId: string): Promise<void> {
     const neighbor = order[neighborIdx] ?? null;
     setStore('activeTaskId', neighbor);
     const neighborTask = neighbor ? store.tasks[neighbor] : null;
-    setStore('activeAgentId', neighborTask?.agentIds[0] ?? null);
+    setStore(
+      'activeAgentId',
+      neighborTask
+        ? neighborTask.selectedAgentId &&
+          neighborTask.agentIds.includes(neighborTask.selectedAgentId)
+          ? neighborTask.selectedAgentId
+          : (neighborTask.agentIds[0] ?? null)
+        : null,
+    );
   }
 
   // Phase 1: mark as removing so UI can animate

@@ -18,6 +18,7 @@ export {
 export {
   loadAgents,
   addAgentToTask,
+  closeAgentInTask,
   markAgentExited,
   restartAgent,
   switchAgent,

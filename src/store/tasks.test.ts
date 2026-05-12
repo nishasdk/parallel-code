@@ -16,6 +16,8 @@ const { mockInvoke, mockIsAgentBracketedPasteEnabled, mockSetStore, mockStore } 
         {
           initialPrompt?: string;
           lastPrompt?: string;
+          agentIds?: string[];
+          promptedAgentIds?: string[];
           stepsEnabled?: boolean;
         }
       >;
@@ -89,6 +91,7 @@ describe('sendPrompt', () => {
     mockStore.tasks = {
       'task-1': {
         lastPrompt: '',
+        agentIds: ['agent-1'],
       },
     };
   });
@@ -114,5 +117,66 @@ describe('sendPrompt', () => {
     await sendPrompt('task-1', 'agent-1', 'line 1\nline 2');
 
     expect(writePayloads()).toEqual(['\x1b[I', '\x1b[200~line 1\nline 2\x1b[201~', '\r']);
+  });
+
+  it('injects steps instructions for each agent first prompt', async () => {
+    mockStore.agents['agent-2'] = { status: 'running' };
+    mockStore.tasks['task-1'] = {
+      lastPrompt: 'already prompted first agent',
+      agentIds: ['agent-1', 'agent-2'],
+      promptedAgentIds: ['agent-1'],
+      stepsEnabled: true,
+    };
+
+    await sendPrompt('task-1', 'agent-2', 'hello from second agent');
+
+    expect(writePayloads()[1]).toContain('hello from second agent');
+    expect(writePayloads()[1]).toContain('IMPORTANT: Maintain .claude/steps.json');
+    expect(mockSetStore).toHaveBeenCalledWith('tasks', 'task-1', 'promptedAgentIds', [
+      'agent-1',
+      'agent-2',
+    ]);
+  });
+
+  it('does not inject steps instructions again for an already prompted agent', async () => {
+    mockStore.tasks['task-1'] = {
+      lastPrompt: 'already prompted first agent',
+      agentIds: ['agent-1'],
+      promptedAgentIds: ['agent-1'],
+      stepsEnabled: true,
+    };
+
+    await sendPrompt('task-1', 'agent-1', 'follow up');
+
+    expect(writePayloads()[1]).toBe('follow up');
+  });
+
+  it('does not duplicate steps instructions when sending the queued initial prompt', async () => {
+    mockStore.tasks['task-1'] = {
+      lastPrompt: '',
+      agentIds: ['agent-1'],
+      initialPrompt: 'queued initial prompt',
+      stepsEnabled: true,
+    };
+
+    await sendPrompt('task-1', 'agent-1', 'queued initial prompt');
+
+    expect(writePayloads()[1]).toBe('queued initial prompt');
+    expect(mockSetStore).toHaveBeenCalledWith('tasks', 'task-1', 'promptedAgentIds', ['agent-1']);
+    expect(mockSetStore).toHaveBeenCalledWith('tasks', 'task-1', 'initialPrompt', undefined);
+  });
+
+  it('injects steps instructions when a first manual prompt differs from the queued initial prompt', async () => {
+    mockStore.tasks['task-1'] = {
+      lastPrompt: '',
+      agentIds: ['agent-1'],
+      initialPrompt: 'queued initial prompt',
+      stepsEnabled: true,
+    };
+
+    await sendPrompt('task-1', 'agent-1', 'manual replacement');
+
+    expect(writePayloads()[1]).toContain('manual replacement');
+    expect(writePayloads()[1]).toContain('IMPORTANT: Maintain .claude/steps.json');
   });
 });

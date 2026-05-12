@@ -44,7 +44,12 @@ function persistedSnapshot(): string {
             {
               notes: t.notes,
               lastPrompt: t.lastPrompt,
+              promptedAgentIds: t.promptedAgentIds,
+              initialPrompt: t.initialPrompt,
               name: t.name,
+              agentIds: t.agentIds,
+              selectedAgentId: t.selectedAgentId,
+              agentDefs: t.agentIds.map((agentId) => store.agents[agentId]?.def?.id ?? null),
               gitIsolation: t.gitIsolation,
               baseBranch: t.baseBranch,
               branchName: t.branchName,

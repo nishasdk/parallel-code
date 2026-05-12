@@ -3,6 +3,7 @@ import {
   store,
   retryCloseTask,
   setActiveTask,
+  setActiveAgent,
   clearInitialPrompt,
   clearPrefillPrompt,
   getProject,
@@ -204,7 +205,15 @@ export function TaskPanel(props: TaskPanelProps) {
     });
   });
 
-  const firstAgentId = () => props.task.agentIds[0] ?? '';
+  const selectedAgentId = () => {
+    const active = store.activeAgentId;
+    if (props.isActive && active && props.task.agentIds.includes(active)) return active;
+    if (props.task.selectedAgentId && props.task.agentIds.includes(props.task.selectedAgentId)) {
+      return props.task.selectedAgentId;
+    }
+    return props.task.agentIds[0] ?? '';
+  };
+  const initialPromptAgentId = () => props.task.agentIds[0] ?? '';
 
   // Heavy components are created once and reused in both stack and split
   // layouts. Solid owns their reactive scope under TaskPanel (not under the
@@ -215,6 +224,8 @@ export function TaskPanel(props: TaskPanelProps) {
     <TaskAITerminal
       task={props.task}
       isActive={props.isActive}
+      selectedAgentId={selectedAgentId()}
+      onSelectAgent={setActiveAgent}
       onStepJumpReady={(fn, fromIdx) => {
         setStepNav(fn ? { jump: fn, firstIndex: fromIdx } : undefined);
       }}
@@ -224,7 +235,7 @@ export function TaskPanel(props: TaskPanelProps) {
   const notesBodyEl = (
     <TaskNotesBody
       task={props.task}
-      agentId={firstAgentId()}
+      agentId={selectedAgentId()}
       onPlanFullscreen={() => setPlanFullscreen(true)}
     />
   );
@@ -264,11 +275,14 @@ export function TaskPanel(props: TaskPanelProps) {
     >
       <PromptInput
         taskId={props.task.id}
-        agentId={firstAgentId()}
+        agentId={selectedAgentId()}
         initialPrompt={props.task.initialPrompt}
+        initialPromptAgentId={initialPromptAgentId()}
         prefillPrompt={props.task.prefillPrompt}
-        onSend={() => {
-          if (props.task.initialPrompt) clearInitialPrompt(props.task.id);
+        onSend={(_text, agentId) => {
+          if (props.task.initialPrompt && agentId === initialPromptAgentId()) {
+            clearInitialPrompt(props.task.id);
+          }
         }}
         onPrefillConsumed={() => clearPrefillPrompt(props.task.id)}
         ref={(el) => (promptRef = el)}
@@ -507,7 +521,7 @@ export function TaskPanel(props: TaskPanelProps) {
           baseBranch={props.task.baseBranch}
           onClose={() => setDiffScrollTarget(null)}
           taskId={props.task.id}
-          agentId={props.task.agentIds[0]}
+          agentId={selectedAgentId()}
           commitList={commitList()}
           selectedCommit={selectedCommit()}
           onCommitNavigate={setSelectedCommit}
@@ -521,7 +535,7 @@ export function TaskPanel(props: TaskPanelProps) {
         planContent={props.task.planContent ?? ''}
         planFileName={props.task.planFileName ?? 'plan.md'}
         taskId={props.task.id}
-        agentId={props.task.agentIds[0]}
+        agentId={selectedAgentId()}
         worktreePath={props.task.worktreePath}
       />
     </div>

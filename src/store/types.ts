@@ -47,6 +47,8 @@ export interface Agent {
   signal: string | null;
   lastOutput: string[];
   generation: number;
+  spawnDelayMs?: number;
+  attachExisting?: boolean;
 }
 
 export interface Task {
@@ -57,9 +59,11 @@ export interface Task {
   branchName: string;
   worktreePath: string;
   agentIds: string[];
+  selectedAgentId?: string;
   shellAgentIds: string[];
   notes: string;
   lastPrompt: string;
+  promptedAgentIds?: string[];
   initialPrompt?: string; // auto-sends when agent is ready
   savedInitialPrompt?: string;
   prefillPrompt?: string; // fills prompt input without sending
@@ -75,6 +79,9 @@ export interface Task {
   githubUrl?: string;
   collapsed?: boolean;
   savedAgentDef?: AgentDef;
+  savedAgentDefs?: AgentDef[];
+  savedSelectedAgentIndex?: number;
+  savedPromptedAgentIndexes?: number[];
   planContent?: string;
   planFileName?: string;
   stepsEnabled?: boolean;
@@ -98,8 +105,13 @@ export interface PersistedTask {
   worktreePath: string;
   notes: string;
   lastPrompt: string;
+  promptedAgentIds?: string[];
+  initialPrompt?: string;
   shellCount: number;
   agentDef: AgentDef | null;
+  agentDefs?: AgentDef[];
+  agentIds?: string[];
+  selectedAgentId?: string;
   gitIsolation: GitIsolationMode;
   baseBranch?: string;
   externalWorktree?: boolean;
@@ -110,6 +122,8 @@ export interface PersistedTask {
   githubUrl?: string;
   savedInitialPrompt?: string;
   collapsed?: boolean;
+  savedSelectedAgentIndex?: number;
+  savedPromptedAgentIndexes?: number[];
   planFileName?: string;
   stepsEnabled?: boolean;
 }

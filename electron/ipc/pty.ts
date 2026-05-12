@@ -28,6 +28,12 @@ interface PtySession {
 
 const sessions = new Map<string, PtySession>();
 
+function sendToChannel(win: BrowserWindow, channelId: string, msg: unknown): void {
+  if (!win.isDestroyed()) {
+    win.webContents.send(`channel:${channelId}`, msg);
+  }
+}
+
 // --- PTY event bus for spawn/exit notifications ---
 
 type PtyEventType = 'spawn' | 'exit' | 'list-changed';
@@ -149,12 +155,33 @@ export function spawnAgent(
     dockerMode?: boolean;
     dockerImage?: string;
     shareDockerAgentAuth?: boolean;
+    attachExisting?: boolean;
     onOutput: { __CHANNEL_ID__: string };
   },
 ): void {
   const channelId = args.onOutput.__CHANNEL_ID__;
   const command = args.command || resolveUserShell();
   const cwd = args.cwd || process.env.HOME || '/';
+
+  // Renderer reloads should reattach to still-running PTYs before validating
+  // the launch command. The process already exists; a missing binary after
+  // reload should not strand the live session on the old renderer channel.
+  const existing = sessions.get(args.agentId);
+  if (existing && args.attachExisting) {
+    existing.channelId = channelId;
+    existing.taskId = args.taskId;
+    existing.isShell = args.isShell ?? existing.isShell;
+    existing.proc.resume();
+    if (args.cols > 0 && args.rows > 0) {
+      existing.proc.resize(args.cols, args.rows);
+    }
+    const scrollback = existing.scrollback.toBase64();
+    if (scrollback) {
+      sendToChannel(win, channelId, { type: 'Data', data: scrollback });
+    }
+    emitPtyEvent('spawn', args.agentId);
+    return;
+  }
 
   // Reject commands with shell metacharacters (node-pty uses execvp, but
   // guard against accidental misuse). Allow bare names (resolved via PATH)
@@ -171,7 +198,6 @@ export function spawnAgent(
   }
 
   // Kill any existing session with the same agentId to prevent PTY leaks
-  const existing = sessions.get(args.agentId);
   if (existing) {
     if (existing.flushTimer) clearTimeout(existing.flushTimer);
     existing.subscribers.clear();
@@ -311,9 +337,7 @@ export function spawnAgent(
   let tailSize = 0;
 
   const send = (msg: unknown) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send(`channel:${channelId}`, msg);
-    }
+    sendToChannel(win, session.channelId, msg);
   };
 
   // In Docker mode, write a diagnostic banner to the terminal so the user

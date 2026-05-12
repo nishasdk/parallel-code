@@ -605,9 +605,6 @@ html[data-look^='islands-'] .task-column.focus-mode .rp-cell:has(> .focusable-pa
 
 html[data-look^='islands-']
   .task-column.focus-mode
-  .rp-cell:has(> .focusable-panel:focus-within)::after,
-html[data-look^='islands-']
-  .task-column.focus-mode
   .rp-cell:has(> .focusable-panel[data-panel-focused='true'])::after {
   content: '';
   position: absolute;
@@ -1283,6 +1280,14 @@ textarea::placeholder {
   border: 2px solid var(--border-focus);
   pointer-events: none;
   z-index: 10;
+}
+
+.agent-terminal-pane:focus-within::after {
+  content: none;
+}
+
+.agent-terminal-pane[data-panel-focused='true']::after {
+  content: '';
 }
 
 /* Prompt input already has its own textarea focus treatment */

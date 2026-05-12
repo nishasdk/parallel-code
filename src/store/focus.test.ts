@@ -26,6 +26,7 @@ type MockTask = {
   name: string;
   projectId: string;
   agentIds: string[];
+  selectedAgentId?: string;
   shellAgentIds: string[];
   stepsEnabled: boolean;
   stepsContent: Array<{ id: string }>;
@@ -68,7 +69,14 @@ vi.mock('./core', () => ({
 vi.mock('./navigation', () => ({
   setActiveTask: vi.fn((id: string) => {
     mockStore.activeTaskId = id;
-    mockStore.activeAgentId = mockStore.tasks[id]?.agentIds?.[0] ?? null;
+    const task = mockStore.tasks[id];
+    const panel = mockStore.focusedPanel[id];
+    const focusedAgentId = panel?.startsWith('ai-terminal:') ? panel.slice(12) : null;
+    mockStore.activeAgentId =
+      (focusedAgentId && task?.agentIds.includes(focusedAgentId) ? focusedAgentId : null) ??
+      (task?.selectedAgentId && task.agentIds.includes(task.selectedAgentId)
+        ? task.selectedAgentId
+        : (task?.agentIds?.[0] ?? null));
   }),
 }));
 
@@ -141,17 +149,21 @@ describe('focus navigation neighbor map', () => {
     expect(mockStore.focusedPanel['task-1']).toBe('shell-toolbar:0');
   });
 
-  it('always enters the top-right panel when moving right from ai-terminal in split mode', () => {
+  it('moves right from a split-mode AI terminal to the task right column', () => {
     setTask('task-1', {
       stepsEnabled: true,
       stepsContent: [{ id: 'step-1' }],
     });
+    setTask('task-2', { agentIds: ['agent-2'] });
+    mockStore.taskOrder = ['task-1', 'task-2'];
     mockStore.taskSplitMode['task-1'] = true;
     mockStore.focusedPanel['task-1'] = 'ai-terminal';
 
     navigateColumn('right');
 
+    expect(mockStore.activeTaskId).toBe('task-1');
     expect(mockStore.focusedPanel['task-1']).toBe('changed-files');
+    expect(mockStore.activeAgentId).toBe('agent-1');
   });
 
   it('falls into the top-right panel when split-mode ai-terminal has no lower left neighbor', () => {
@@ -204,7 +216,7 @@ describe('focus navigation neighbor map', () => {
 
     expect(mockStore.activeTaskId).toBe('task-1');
     expect(mockStore.sidebarFocused).toBe(false);
-    expect(mockStore.focusedPanel['task-1']).toBe('ai-terminal');
+    expect(mockStore.focusedPanel['task-1']).toBe('ai-terminal:agent-1');
   });
 
   it('clamps split shell-toolbar down-moves to the last available shell', () => {
@@ -221,6 +233,96 @@ describe('focus navigation neighbor map', () => {
     navigateRow('down');
 
     expect(mockStore.focusedPanel['task-1']).toBe('shell:0');
+  });
+
+  it('moves horizontally between multiple AI agent terminals', () => {
+    setTask('task-1', { agentIds: ['agent-1', 'agent-2'] });
+    mockStore.focusedPanel['task-1'] = 'ai-terminal:agent-1';
+
+    navigateColumn('right');
+
+    expect(mockStore.focusedPanel['task-1']).toBe('ai-terminal:agent-2');
+    expect(mockStore.activeAgentId).toBe('agent-2');
+  });
+
+  it('moves horizontally between multiple split-mode AI agent terminals before crossing tasks', () => {
+    setTask('task-1', { agentIds: ['agent-1', 'agent-2'] });
+    setTask('task-2', { agentIds: ['agent-3'] });
+    mockStore.taskOrder = ['task-1', 'task-2'];
+    mockStore.taskSplitMode['task-1'] = true;
+    mockStore.focusedPanel['task-1'] = 'ai-terminal:agent-1';
+
+    navigateColumn('right');
+
+    expect(mockStore.activeTaskId).toBe('task-1');
+    expect(mockStore.focusedPanel['task-1']).toBe('ai-terminal:agent-2');
+    expect(mockStore.activeAgentId).toBe('agent-2');
+
+    navigateColumn('right');
+
+    expect(mockStore.activeTaskId).toBe('task-1');
+    expect(mockStore.focusedPanel['task-1']).toBe('changed-files');
+    expect(mockStore.activeAgentId).toBe('agent-2');
+
+    navigateColumn('right');
+
+    expect(mockStore.activeTaskId).toBe('task-2');
+    expect(mockStore.focusedPanel['task-2']).toBe('notes');
+    expect(mockStore.activeAgentId).toBe('agent-3');
+  });
+
+  it('moves right from a single split-mode AI terminal into the right column', () => {
+    setTask('task-1', { agentIds: ['agent-1'] });
+    setTask('task-2', { agentIds: ['agent-2'] });
+    mockStore.taskOrder = ['task-1', 'task-2'];
+    mockStore.taskSplitMode['task-1'] = true;
+    mockStore.focusedPanel['task-1'] = 'ai-terminal:agent-1';
+
+    navigateColumn('right');
+
+    expect(mockStore.activeTaskId).toBe('task-1');
+    expect(mockStore.focusedPanel['task-1']).toBe('changed-files');
+    expect(mockStore.activeAgentId).toBe('agent-1');
+  });
+
+  it('preserves the target task selected agent when crossing into its AI terminal row', () => {
+    setTask('task-1', { agentIds: ['agent-1'] });
+    setTask('task-2', {
+      agentIds: ['agent-2a', 'agent-2b'],
+      selectedAgentId: 'agent-2b',
+    });
+    mockStore.taskOrder = ['task-1', 'task-2'];
+    mockStore.focusedPanel['task-1'] = 'ai-terminal:agent-1';
+
+    navigateColumn('right');
+
+    expect(mockStore.activeTaskId).toBe('task-2');
+    expect(mockStore.focusedPanel['task-2']).toBe('ai-terminal:agent-2b');
+    expect(mockStore.activeAgentId).toBe('agent-2b');
+  });
+
+  it('moves down from a secondary split-mode AI terminal to the prompt', () => {
+    setTask('task-1', { agentIds: ['agent-1', 'agent-2'] });
+    mockStore.taskSplitMode['task-1'] = true;
+    mockStore.activeAgentId = 'agent-2';
+    mockStore.focusedPanel['task-1'] = 'ai-terminal:agent-2';
+
+    navigateRow('down');
+
+    expect(mockStore.focusedPanel['task-1']).toBe('prompt');
+    expect(mockStore.activeAgentId).toBe('agent-2');
+  });
+
+  it('moves up from the split-mode prompt to the active AI terminal', () => {
+    setTask('task-1', { agentIds: ['agent-1', 'agent-2'] });
+    mockStore.taskSplitMode['task-1'] = true;
+    mockStore.activeAgentId = 'agent-2';
+    mockStore.focusedPanel['task-1'] = 'prompt';
+
+    navigateRow('up');
+
+    expect(mockStore.focusedPanel['task-1']).toBe('ai-terminal:agent-2');
+    expect(mockStore.activeAgentId).toBe('agent-2');
   });
 });
 
@@ -259,7 +361,7 @@ describe('navigateTask', () => {
     navigateTask('right');
 
     expect(mockStore.activeTaskId).toBe('task-2');
-    expect(mockStore.focusedPanel['task-2']).toBe('ai-terminal');
+    expect(mockStore.focusedPanel['task-2']).toBe('ai-terminal:agent-1');
   });
 
   it('is a no-op at the leftmost task', () => {

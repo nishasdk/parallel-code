@@ -403,6 +403,11 @@ function App() {
     };
     document.addEventListener('paste', handlePaste);
 
+    const handleBeforeUnload = () => {
+      void saveState();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     const handleWheel = createCtrlWheelZoomHandler((delta) => adjustGlobalScale(delta));
     mainRef.addEventListener('wheel', handleWheel, { passive: false });
 
@@ -537,6 +542,7 @@ function App() {
 
     onCleanup(() => {
       document.removeEventListener('paste', handlePaste);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       mainRef.removeEventListener('wheel', handleWheel);
       unlistenCloseRequested();
       cleanupShortcuts();

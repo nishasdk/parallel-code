@@ -34,13 +34,46 @@ export function triggerAction(key: string): void {
 
 // Grid-based spatial navigation. Two task layouts:
 //  - vertical stack (default): everything in one column
-//  - split (focus mode, panel wide enough): ai-terminal/prompt anchor the left,
-//    changed-files/notes/steps/shell anchor the right, and `ai-terminal` is
-//    repeated down col 0 so left/right crossings into the right column stay
-//    consistent.
+//  - split (focus mode, panel wide enough): ai-terminal panes/prompt anchor the
+//    left, changed-files/notes/steps/shell anchor the right, and AI panes are
+//    repeated down the left columns so left/right crossings stay consistent.
+
+const AI_TERMINAL_PANEL = 'ai-terminal';
+
+function aiTerminalPanelId(agentId: string): string {
+  return `${AI_TERMINAL_PANEL}:${agentId}`;
+}
+
+function isAiTerminalPanel(panel: string): boolean {
+  return panel === AI_TERMINAL_PANEL || panel.startsWith(`${AI_TERMINAL_PANEL}:`);
+}
+
+function agentIdFromAiTerminalPanel(panel: string): string | null {
+  return panel.startsWith(`${AI_TERMINAL_PANEL}:`)
+    ? panel.slice(AI_TERMINAL_PANEL.length + 1)
+    : null;
+}
+
+function aiTerminalPanels(task: { agentIds: string[] }): string[] {
+  return task.agentIds.length > 0 ? task.agentIds.map(aiTerminalPanelId) : [AI_TERMINAL_PANEL];
+}
+
+function normalizeTaskPanel(taskId: string, panel: string): string {
+  if (panel !== AI_TERMINAL_PANEL) return panel;
+  const task = store.tasks[taskId];
+  if (!task) return panel;
+  const activeAgentId = store.activeAgentId;
+  const agentId =
+    activeAgentId && task.agentIds.includes(activeAgentId) ? activeAgentId : task.agentIds[0];
+  return agentId ? aiTerminalPanelId(agentId) : panel;
+}
 
 /** Cells that belong to the left column in split mode. */
-const LEFT_COL_PANELS = new Set(['title', 'ai-terminal', 'prompt', 'terminal']);
+function isLeftColumnPanel(panel: string): boolean {
+  return (
+    panel === 'title' || panel === 'prompt' || panel === 'terminal' || isAiTerminalPanel(panel)
+  );
+}
 
 function buildGrid(panelId: string): string[][] {
   const task = store.tasks[panelId];
@@ -48,22 +81,23 @@ function buildGrid(panelId: string): string[][] {
     const bookmarkCount =
       store.projects.find((p) => p.id === task.projectId)?.terminalBookmarks?.length ?? 0;
     const toolbarCols = Array.from({ length: 1 + bookmarkCount }, (_, i) => `shell-toolbar:${i}`);
+    const aiCols = aiTerminalPanels(task);
 
     if (store.taskSplitMode[panelId]) {
       const grid: string[][] = [['title']];
-      grid.push(['ai-terminal', 'changed-files']);
-      grid.push(['ai-terminal', 'notes']);
+      grid.push([...aiCols, 'changed-files']);
+      grid.push([...aiCols, 'notes']);
       if (task.stepsEnabled && task.stepsContent?.length) {
-        grid.push(['ai-terminal', 'steps']);
+        grid.push([...aiCols, 'steps']);
       }
 
-      // Pair the bottom-left (prompt or ai-terminal if prompt hidden) with
+      // Pair the bottom-left (prompt or first AI pane if prompt hidden) with
       // whatever's at the bottom-right, so → from prompt jumps into the shell
       // section instead of falling off to the next task.
       const hasShells = task.shellAgentIds.length > 0;
-      const leftBottom = store.showPromptInput ? 'prompt' : 'ai-terminal';
+      const leftBottom = store.showPromptInput ? 'prompt' : aiCols[0];
       if (hasShells) {
-        grid.push(['ai-terminal', ...toolbarCols]);
+        grid.push([...aiCols, ...toolbarCols]);
         grid.push([leftBottom, ...task.shellAgentIds.map((_, i) => `shell:${i}`)]);
       } else {
         grid.push([leftBottom, ...toolbarCols]);
@@ -77,7 +111,7 @@ function buildGrid(panelId: string): string[][] {
     if (task.shellAgentIds.length > 0) {
       grid.push(task.shellAgentIds.map((_, i) => `shell:${i}`));
     }
-    grid.push(['ai-terminal']);
+    grid.push(aiCols);
     if (task.stepsEnabled && task.stepsContent?.length) {
       grid.push(['steps']);
     }
@@ -96,7 +130,7 @@ function pickTopRightColumnTarget(grid: string[][]): string | null {
   for (const row of grid) {
     for (let c = 1; c < row.length; c++) {
       const cell = row[c];
-      if (!LEFT_COL_PANELS.has(cell)) return cell;
+      if (!isLeftColumnPanel(cell)) return cell;
     }
   }
   return null;
@@ -104,7 +138,8 @@ function pickTopRightColumnTarget(grid: string[][]): string | null {
 
 /** The panel to focus when navigating into a task or terminal. */
 function defaultPanelFor(panelId: string): string {
-  return store.tasks[panelId] ? 'ai-terminal' : 'terminal';
+  const task = store.tasks[panelId];
+  return task ? aiTerminalPanels(task)[0] : 'terminal';
 }
 
 interface GridPos {
@@ -121,7 +156,7 @@ function findInGrid(grid: string[][], cell: string): GridPos | null {
 }
 
 export function getTaskFocusedPanel(taskId: string): string {
-  return store.focusedPanel[taskId] ?? defaultPanelFor(taskId);
+  return normalizeTaskPanel(taskId, store.focusedPanel[taskId] ?? defaultPanelFor(taskId));
 }
 
 /**
@@ -142,10 +177,16 @@ export function isPanelFocusedPrefix(taskId: string, prefix: string): boolean {
 }
 
 export function setTaskFocusedPanel(taskId: string, panel: string): void {
-  setStore('focusedPanel', taskId, panel);
+  const normalizedPanel = normalizeTaskPanel(taskId, panel);
+  setStore('focusedPanel', taskId, normalizedPanel);
+  const agentId = agentIdFromAiTerminalPanel(normalizedPanel);
+  if (agentId && store.tasks[taskId]?.agentIds.includes(agentId)) {
+    setStore('activeAgentId', agentId);
+    setStore('tasks', taskId, 'selectedAgentId', agentId);
+  }
   setStore('sidebarFocused', false);
   setStore('placeholderFocused', false);
-  triggerFocus(`${taskId}:${panel}`);
+  triggerFocus(`${taskId}:${normalizedPanel}`);
   scrollTaskIntoView(taskId);
 }
 
@@ -187,13 +228,28 @@ export function setSidebarFocusedProjectId(id: string | null): void {
 }
 
 function focusTaskPanel(taskId: string, panel: string): void {
-  batch(() => {
-    setStore('focusedPanel', taskId, panel);
-    setStore('sidebarFocused', false);
-    setStore('placeholderFocused', false);
-    setActiveTask(taskId);
-  });
-  triggerFocus(`${taskId}:${panel}`);
+  setActiveTask(taskId);
+  setTaskFocusedPanel(taskId, panel);
+}
+
+function navigateAiTerminalColumn(
+  taskId: string,
+  current: string,
+  direction: 'left' | 'right',
+): boolean {
+  if (!isAiTerminalPanel(current)) return false;
+  const task = store.tasks[taskId];
+  if (!task) return false;
+
+  const panels = aiTerminalPanels(task);
+  const currentIdx = panels.indexOf(current);
+  const step = direction === 'right' ? 1 : -1;
+  const nextIdx = currentIdx + step;
+  if (currentIdx !== -1 && nextIdx >= 0 && nextIdx < panels.length) {
+    setTaskFocusedPanel(taskId, panels[nextIdx]);
+    return true;
+  }
+  return false;
 }
 
 export function navigateRow(direction: 'up' | 'down'): void {
@@ -253,7 +309,7 @@ export function navigateRow(direction: 'up' | 'down'): void {
   if (!taskId) return;
 
   const grid = buildGrid(taskId);
-  const current = getTaskFocusedPanel(taskId);
+  let current = getTaskFocusedPanel(taskId);
   let pos = findInGrid(grid, current);
   // The previously focused cell can vanish (task.stepsEnabled off, shells killed,
   // width crossing threshold). Recover by falling back to the default instead of
@@ -263,6 +319,18 @@ export function navigateRow(direction: 'up' | 'down'): void {
     pos = findInGrid(grid, fallback);
     if (!pos) return;
     setTaskFocusedPanel(taskId, fallback);
+    current = fallback;
+  }
+
+  if (store.taskSplitMode[taskId]) {
+    if (direction === 'down' && isAiTerminalPanel(current) && store.showPromptInput) {
+      setTaskFocusedPanel(taskId, 'prompt');
+      return;
+    }
+    if (direction === 'up' && current === 'prompt') {
+      setTaskFocusedPanel(taskId, AI_TERMINAL_PANEL);
+      return;
+    }
   }
 
   const step = direction === 'up' ? -1 : 1;
@@ -286,7 +354,7 @@ export function navigateRow(direction: 'up' | 'down'): void {
     direction === 'down' &&
     store.taskSplitMode[taskId] &&
     pos.col === 0 &&
-    current === 'ai-terminal'
+    isAiTerminalPanel(current)
   ) {
     const target = pickTopRightColumnTarget(grid);
     if (target) setTaskFocusedPanel(taskId, target);
@@ -335,27 +403,17 @@ export function navigateColumn(direction: 'left' | 'right'): void {
   if (!taskId) return;
 
   const grid = buildGrid(taskId);
-  const current = getTaskFocusedPanel(taskId);
+  let current = getTaskFocusedPanel(taskId);
   let pos = findInGrid(grid, current);
   if (!pos) {
     const fallback = defaultPanelFor(taskId);
     pos = findInGrid(grid, fallback);
     if (!pos) return;
     setTaskFocusedPanel(taskId, fallback);
+    current = fallback;
   }
 
-  if (
-    direction === 'right' &&
-    pos.col === 0 &&
-    current === 'ai-terminal' &&
-    store.taskSplitMode[taskId]
-  ) {
-    const target = pickTopRightColumnTarget(grid);
-    if (target) {
-      setTaskFocusedPanel(taskId, target);
-      return;
-    }
-  }
+  if (navigateAiTerminalColumn(taskId, current, direction)) return;
 
   const row = grid[pos.row];
   const nextCol = direction === 'left' ? pos.col - 1 : pos.col + 1;
@@ -380,7 +438,8 @@ export function navigateColumn(direction: 'left' | 'right'): void {
       const targetRow = targetPos ? targetPos.row : pos.row;
       const safeRow = Math.min(targetRow, targetGrid.length - 1);
       const col = entryEdge === 'right' ? 0 : targetGrid[safeRow].length - 1;
-      focusTaskPanel(targetId, targetGrid[safeRow][col]);
+      const target = targetGrid[safeRow][col];
+      focusTaskPanel(targetId, isAiTerminalPanel(target) ? AI_TERMINAL_PANEL : target);
     }
   };
 

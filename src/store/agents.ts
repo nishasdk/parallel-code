@@ -5,6 +5,7 @@ import { store, setStore } from './core';
 import type { AgentDef } from '../ipc/types';
 import type { Agent } from './types';
 import { refreshTaskStatus, clearAgentActivity, markAgentSpawned } from './taskStatus';
+import { saveState } from './persistence';
 
 export async function loadAgents(): Promise<void> {
   const defaults = await invoke<AgentDef[]>(IPC.ListAgents);
@@ -13,9 +14,9 @@ export async function loadAgents(): Promise<void> {
   setStore('availableAgents', [...defaults.filter((d) => !customIds.has(d.id)), ...custom]);
 }
 
-export async function addAgentToTask(taskId: string, agentDef: AgentDef): Promise<void> {
+export async function addAgentToTask(taskId: string, agentDef: AgentDef): Promise<string | null> {
   const task = store.tasks[taskId];
-  if (!task) return;
+  if (!task) return null;
 
   const agentId = crypto.randomUUID();
   const agent: Agent = {
@@ -34,12 +35,51 @@ export async function addAgentToTask(taskId: string, agentDef: AgentDef): Promis
     produce((s) => {
       s.agents[agentId] = agent;
       s.tasks[taskId].agentIds.push(agentId);
+      s.tasks[taskId].selectedAgentId = agentId;
       s.activeAgentId = agentId;
+      s.lastAgentId = agentDef.id;
     }),
   );
 
   // Start the agent as "busy" immediately, before any PTY data arrives.
   markAgentSpawned(agentId);
+  void saveState();
+  return agentId;
+}
+
+export async function closeAgentInTask(taskId: string, agentId: string): Promise<void> {
+  const task = store.tasks[taskId];
+  if (!task || task.agentIds.length <= 1 || !task.agentIds.includes(agentId)) return;
+
+  await invoke(IPC.KillAgent, { agentId }).catch(console.error);
+  clearAgentActivity(agentId);
+
+  setStore(
+    produce((s) => {
+      const t = s.tasks[taskId];
+      if (!t) return;
+
+      const idx = t.agentIds.indexOf(agentId);
+      if (idx === -1 || t.agentIds.length <= 1) return;
+
+      t.agentIds.splice(idx, 1);
+      const promptedAgentIds = t.promptedAgentIds?.filter((id) => id !== agentId);
+      t.promptedAgentIds =
+        promptedAgentIds && promptedAgentIds.length > 0 ? promptedAgentIds : undefined;
+      delete s.agents[agentId];
+
+      const fallbackAgentId = t.agentIds[Math.min(idx, t.agentIds.length - 1)] ?? null;
+      if (s.activeAgentId === agentId) {
+        s.activeAgentId = fallbackAgentId;
+      }
+      if (t.selectedAgentId === agentId) {
+        t.selectedAgentId = fallbackAgentId ?? undefined;
+      }
+    }),
+  );
+
+  refreshTaskStatus(taskId);
+  void saveState();
 }
 
 export function markAgentExited(
@@ -72,6 +112,8 @@ export function restartAgent(agentId: string, useResumeArgs: boolean): void {
         s.agents[agentId].signal = null;
         s.agents[agentId].lastOutput = [];
         s.agents[agentId].resumed = useResumeArgs;
+        s.agents[agentId].spawnDelayMs = undefined;
+        s.agents[agentId].attachExisting = undefined;
         s.agents[agentId].generation += 1;
       }
     }),
@@ -89,6 +131,8 @@ export function switchAgent(agentId: string, newDef: AgentDef): void {
         s.agents[agentId].signal = null;
         s.agents[agentId].lastOutput = [];
         s.agents[agentId].resumed = false;
+        s.agents[agentId].spawnDelayMs = undefined;
+        s.agents[agentId].attachExisting = undefined;
         s.agents[agentId].generation += 1;
       }
     }),

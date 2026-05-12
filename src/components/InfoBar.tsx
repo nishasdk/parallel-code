@@ -8,6 +8,7 @@ interface InfoBarProps {
   onDblClick?: () => void;
   title?: string;
   class?: string;
+  allowOverflow?: boolean;
 }
 
 export function InfoBar(props: InfoBarProps) {
@@ -27,7 +28,7 @@ export function InfoBar(props: InfoBarProps) {
         'font-size': sf(12),
         color: theme.fgMuted,
         'white-space': 'nowrap',
-        overflow: 'hidden',
+        overflow: props.allowOverflow ? 'visible' : 'hidden',
         'text-overflow': 'ellipsis',
         cursor: props.onClick ? 'pointer' : 'default',
         'user-select': 'none',
