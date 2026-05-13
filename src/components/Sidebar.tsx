@@ -47,18 +47,12 @@ const SIDEBAR_MIN_WIDTH = 160;
 const SIDEBAR_MAX_WIDTH = 480;
 const SIDEBAR_SIZE_KEY = 'sidebar:width';
 
-/** Floor heights for the two scrollable sidebar regions — kept in lockstep so
- *  neither region can be squeezed to nothing under flex pressure. The projects
- *  section value adds the header strip on top of the tasks-list floor. */
-const TASKS_LIST_MIN_HEIGHT = '140px';
-const PROJECTS_SECTION_MIN_HEIGHT = '170px';
-/** Caps the project list before it starts pushing the tasks list around;
- *  beyond this the list scrolls internally. */
-const PROJECTS_LIST_MAX_HEIGHT = '40vh';
-/** Below this many projects the natural content size is already smaller than
- *  PROJECTS_SECTION_MIN_HEIGHT, so reserving the floor would just create dead
- *  space. The floor only matters once content can plausibly threaten tasks. */
-const PROJECTS_FLOOR_THRESHOLD = 4;
+/** The task list is the primary navigation surface. When both lists are dense,
+ *  cap projects after a few visible rows so tasks keep most of the sidebar. */
+const TASKS_LIST_MIN_HEIGHT = '180px';
+const PROJECTS_LIST_DEFAULT_MAX_HEIGHT = '40vh';
+const PROJECTS_LIST_DENSE_MAX_HEIGHT = 'min(24vh, 180px)';
+const DENSE_SIDEBAR_LIST_THRESHOLD = 4;
 
 function getAttentionColor(attention: TaskAttentionState): string | null {
   if (attention === 'active') return theme.accent;
@@ -117,6 +111,14 @@ export function Sidebar() {
     return map;
   });
   const groupedTasks = createMemo(() => computeGroupedTasks());
+  const sidebarTaskCount = createMemo(
+    () => store.taskOrder.length + store.collapsedTaskOrder.length,
+  );
+  const projectListMaxHeight = () =>
+    store.projects.length >= DENSE_SIDEBAR_LIST_THRESHOLD &&
+    sidebarTaskCount() >= DENSE_SIDEBAR_LIST_THRESHOLD
+      ? PROJECTS_LIST_DENSE_MAX_HEIGHT
+      : PROJECTS_LIST_DEFAULT_MAX_HEIGHT;
   function handleResizeMouseDown(e: MouseEvent) {
     e.preventDefault();
     setResizing(true);
@@ -388,15 +390,14 @@ export function Sidebar() {
           </div>
         </div>
 
-        {/* Projects section — outer enforces the same floor as the tasks list,
-            but only above the threshold (so few-project users see no waste) */}
+        {/* Projects section */}
         <div
           style={{
             display: 'flex',
             'flex-direction': 'column',
             gap: '6px',
-            'min-height':
-              store.projects.length >= PROJECTS_FLOOR_THRESHOLD ? PROJECTS_SECTION_MIN_HEIGHT : '0',
+            flex: '0 1 auto',
+            'min-height': '0',
           }}
         >
           <div
@@ -429,16 +430,15 @@ export function Sidebar() {
             />
           </div>
 
-          {/* Scrollable project list — fills the outer (which carries the
-              floor); caps so tasks below get a fair share */}
+          {/* Scrollable project list */}
           <div
             style={{
               display: 'flex',
               'flex-direction': 'column',
               gap: '6px',
-              flex: '1',
+              flex: '0 1 auto',
               'min-height': '0',
-              'max-height': PROJECTS_LIST_MAX_HEIGHT,
+              'max-height': projectListMaxHeight(),
               'overflow-y': 'auto',
             }}
           >
