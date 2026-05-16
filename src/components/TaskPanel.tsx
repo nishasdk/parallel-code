@@ -336,7 +336,7 @@ export function TaskPanel(props: TaskPanelProps) {
 
   const changedFilesChild: PanelChild = {
     id: 'changed-files',
-    minSize: 100,
+    minSize: 220,
     maxAutoSize: CHANGED_FILES_PANEL_AUTO_MAX_PX,
     content: () => changedFilesEl,
   };
@@ -344,9 +344,14 @@ export function TaskPanel(props: TaskPanelProps) {
   // Stack-mode row containing notes (absorbs horizontally) and changed files.
   // The inline 200 px floor prevents the nested horizontal panel from collapsing
   // when the outer flex-first tree asks for content-size.
+  // notes-files is an absorber (flexGrow: 0.5) in the stack-mode vertical panel
+  // so its height tracks the task panel instead of being content-driven —
+  // prevents height instability when the inner notes↔changed-files divider is
+  // moved, while keeping the AI terminal ~2× notes-files.
   const notesAndFilesChild: PanelChild = {
     id: 'notes-files',
-    minSize: 60,
+    minSize: 100,
+    flexGrow: 0.5,
     content: () => (
       <div style={{ height: '100%', 'min-height': '200px' }}>
         {isNoneGit() ? (
@@ -417,7 +422,7 @@ export function TaskPanel(props: TaskPanelProps) {
             <ResizablePanel
               direction="vertical"
               persistKey={`task:${props.task.id}`}
-              absorberIds={['ai-terminal']}
+              absorberIds={['notes-files', 'ai-terminal']}
               children={[
                 notesAndFilesChild,
                 shellSectionChild,

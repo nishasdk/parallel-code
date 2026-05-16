@@ -56,7 +56,7 @@ export function TaskChangedFilesSection(props: TaskChangedFilesSectionProps) {
         height: '100%',
         'min-height': '140px',
         'max-height': '40vh',
-        'min-width': '200px',
+        'min-width': '220px',
         background: theme.taskPanelBg,
         display: 'flex',
         'flex-direction': 'column',
