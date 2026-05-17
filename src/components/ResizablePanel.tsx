@@ -20,6 +20,10 @@ export interface PanelChild {
    *  smaller than their pinned size would be (e.g., a toolbar that collapses
    *  when its body is empty), so a stale pin can't leave a visible gap. */
   noPin?: () => boolean;
+  /** Flex-grow weight for absorbers. Defaults to 1 (equal share). Use a
+   *  smaller value to give an absorber less space than others, e.g. 0.5
+   *  for notes-files so the AI terminal gets roughly 2/3 of remaining space. */
+  flexGrow?: number;
 }
 
 interface ResizablePanelProps {
@@ -40,8 +44,8 @@ interface ResizablePanelProps {
 export function ResizablePanel(props: ResizablePanelProps) {
   const [draggingIdx, setDraggingIdx] = createSignal<number | null>(null);
   const [dragOverride, setDragOverride] = createSignal<Record<number, number>>({});
-  /** Stable per-index refs so drag measurement doesn't rely on DOM index math. */
-  const wrapperRefs: HTMLDivElement[] = [];
+  /** Stable per-ID refs so drag measurement survives dynamic children changes. */
+  const wrapperRefs = new Map<string, HTMLDivElement>();
 
   const isHorizontal = () => props.direction === 'horizontal';
 
@@ -61,14 +65,34 @@ export function ResizablePanel(props: ResizablePanelProps) {
    *  absorbers, or a child that just turned noPin (e.g., last terminal closed
    *  with a pin still in the store) can leave stale entries behind. Detect
    *  and delete so the store self-heals instead of silently diverging from
-   *  what the user sees. */
+   *  what the user sees.
+   *
+   *  Multi-absorber panels store pin values as flex-grow ratios (both sides
+   *  pinned after a drag). If only ONE absorber carries a pin while the others
+   *  are unpinned, it's a stale pixel value from before the child was promoted
+   *  to absorber status — treat it as stale to prevent a 300:1 ratio that
+   *  would starve every other absorber. */
   createEffect(() => {
     const absorbers = absorberSet();
     const stale: string[] = [];
+
+    // For multi-absorber panels, count how many absorbers are currently pinned.
+    // If exactly one is pinned it's asymmetric (stale pixel value), so clear it.
+    let pinnedAbsorberCount = 0;
+    if (absorbers.size > 1) {
+      for (const child of props.children) {
+        if (!absorbers.has(child.id)) continue;
+        const key = keyFor(child.id);
+        if (key && getPanelUserSize(key) !== undefined) pinnedAbsorberCount++;
+      }
+    }
+    const asymmetricAbsorberPin = absorbers.size > 1 && pinnedAbsorberCount === 1;
+
     for (const child of props.children) {
       const isSoleAbsorber = absorbers.size === 1 && absorbers.has(child.id);
       const noPin = child.noPin?.() === true;
-      if (!isSoleAbsorber && !noPin) continue;
+      const isStaleAsymmetric = asymmetricAbsorberPin && absorbers.has(child.id);
+      if (!isSoleAbsorber && !noPin && !isStaleAsymmetric) continue;
       const key = keyFor(child.id);
       if (key && getPanelUserSize(key) !== undefined) stale.push(key);
     }
@@ -89,6 +113,17 @@ export function ResizablePanel(props: ResizablePanelProps) {
     const min = child.minSize ?? 0;
 
     if (pinned !== undefined) {
+      // Drag override uses pixel-precise flex for live visual feedback.
+      // Persisted pins on absorbers use flex-grow ratio so they scale when the
+      // container resizes (e.g. notes/changed-files in a horizontal split that
+      // should stay proportional with the window).
+      if (isAbsorber(child.id) && dragOverride()[idx] === undefined) {
+        return {
+          flex: `${pinned} 1 0`,
+          [minDim]: `${min}px`,
+          overflow: 'hidden',
+        };
+      }
       return {
         flex: `0 0 ${pinned}px`,
         [dim]: `${pinned}px`,
@@ -97,8 +132,9 @@ export function ResizablePanel(props: ResizablePanelProps) {
       };
     }
     if (isAbsorber(child.id)) {
+      const fg = child.flexGrow ?? 1;
       return {
-        flex: '1 1 0',
+        flex: `${fg} 1 0`,
         [minDim]: `${min}px`,
         overflow: 'hidden',
       };
@@ -119,8 +155,8 @@ export function ResizablePanel(props: ResizablePanelProps) {
     };
   }
 
-  function measureWrapper(idx: number): number {
-    const el = wrapperRefs[idx];
+  function measureWrapper(childId: string): number {
+    const el = wrapperRefs.get(childId);
     if (!el) return 0;
     return isHorizontal() ? el.getBoundingClientRect().width : el.getBoundingClientRect().height;
   }
@@ -138,8 +174,8 @@ export function ResizablePanel(props: ResizablePanelProps) {
 
     setDraggingIdx(handleIdx);
     const startPos = isHorizontal() ? e.clientX : e.clientY;
-    const startLeft = measureWrapper(handleIdx);
-    const startRight = measureWrapper(handleIdx + 1);
+    const startLeft = measureWrapper(leftChild.id);
+    const startRight = measureWrapper(rightChild.id);
     const leftMin = leftChild.minSize ?? 0;
     const rightMin = rightChild.minSize ?? 0;
     let latestLeft = startLeft;
@@ -156,11 +192,10 @@ export function ResizablePanel(props: ResizablePanelProps) {
     let absorberMin = 0;
     let absorberPresent = false;
     if (leftNoPin || rightNoPin) {
-      for (let i = 0; i < props.children.length; i++) {
-        if (i === handleIdx || i === handleIdx + 1) continue;
-        const c = props.children[i];
+      for (const c of props.children) {
+        if (c.id === leftChild.id || c.id === rightChild.id) continue;
         if (isAbsorber(c.id)) {
-          absorberStart = measureWrapper(i);
+          absorberStart = measureWrapper(c.id);
           absorberMin = c.minSize ?? 0;
           absorberPresent = true;
           break;
@@ -264,7 +299,7 @@ export function ResizablePanel(props: ResizablePanelProps) {
             <div
               class="rp-cell"
               ref={(el) => {
-                wrapperRefs[i()] = el;
+                wrapperRefs.set(child.id, el);
               }}
               style={childStyle(child, i())}
             >
