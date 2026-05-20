@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, For, type JSX } from 'solid-js';
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, type JSX } from 'solid-js';
 import { getPanelUserSize, setPanelUserSize, deletePanelUserSize } from '../store/store';
 
 export interface PanelChild {
@@ -20,10 +20,10 @@ export interface PanelChild {
    *  smaller than their pinned size would be (e.g., a toolbar that collapses
    *  when its body is empty), so a stale pin can't leave a visible gap. */
   noPin?: () => boolean;
-  /** Flex-grow weight for absorbers. Defaults to 1 (equal share). Use a
-   *  smaller value to give an absorber less space than others, e.g. 0.5
-   *  for notes-files so the AI terminal gets roughly 2/3 of remaining space. */
-  flexGrow?: number;
+  /** Relative flex-grow weight among absorbers. Defaults to 1 (equal share).
+   *  Ignored on non-absorbers. Use a smaller value to give an absorber less
+   *  space than its siblings, e.g. 0.5 so the AI terminal gets ~2/3. */
+  absorberWeight?: number;
 }
 
 interface ResizablePanelProps {
@@ -43,7 +43,7 @@ interface ResizablePanelProps {
 
 export function ResizablePanel(props: ResizablePanelProps) {
   const [draggingIdx, setDraggingIdx] = createSignal<number | null>(null);
-  const [dragOverride, setDragOverride] = createSignal<Record<number, number>>({});
+  const [dragOverride, setDragOverride] = createSignal<Record<string, number>>({});
   /** Stable per-ID refs so drag measurement survives dynamic children changes. */
   const wrapperRefs = new Map<string, HTMLDivElement>();
 
@@ -99,14 +99,15 @@ export function ResizablePanel(props: ResizablePanelProps) {
     if (stale.length > 0) deletePanelUserSize(stale);
   });
 
-  function childStyle(child: PanelChild, idx: number): JSX.CSSProperties {
+  function childStyle(child: PanelChild): JSX.CSSProperties {
     const noPin = child.noPin?.() === true;
     // noPin children can't be sized by drag override or persisted pin — they
     // stay content-sized so an empty inner state can't leave a visible gap.
     const key = keyFor(child.id);
-    const pinned = noPin
+    const raw = noPin
       ? undefined
-      : (dragOverride()[idx] ?? (key ? getPanelUserSize(key) : undefined));
+      : (dragOverride()[child.id] ?? (key ? getPanelUserSize(key) : undefined));
+    const pinned = raw !== undefined && Number.isFinite(raw) && raw > 0 ? raw : undefined;
     const dim = isHorizontal() ? 'width' : 'height';
     const minDim = isHorizontal() ? 'min-width' : 'min-height';
     const maxDim = isHorizontal() ? 'max-width' : 'max-height';
@@ -117,7 +118,7 @@ export function ResizablePanel(props: ResizablePanelProps) {
       // Persisted pins on absorbers use flex-grow ratio so they scale when the
       // container resizes (e.g. notes/changed-files in a horizontal split that
       // should stay proportional with the window).
-      if (isAbsorber(child.id) && dragOverride()[idx] === undefined) {
+      if (isAbsorber(child.id) && dragOverride()[child.id] === undefined) {
         return {
           flex: `${pinned} 1 0`,
           [minDim]: `${min}px`,
@@ -132,7 +133,7 @@ export function ResizablePanel(props: ResizablePanelProps) {
       };
     }
     if (isAbsorber(child.id)) {
-      const fg = child.flexGrow ?? 1;
+      const fg = child.absorberWeight ?? 1;
       return {
         flex: `${fg} 1 0`,
         [minDim]: `${min}px`,
@@ -222,12 +223,12 @@ export function ResizablePanel(props: ResizablePanelProps) {
       // Skip the override on noPin children so they stay content-sized; also
       // skip on a sole absorber adjacent to a noPin sibling, since pinning the
       // absorber temporarily would steal the space the noPin child can't take.
-      const override: Record<number, number> = {};
+      const override: Record<string, number> = {};
       if (!leftNoPin && !(leftIsAbs && rightNoPin && soleAbs)) {
-        override[handleIdx] = latestLeft;
+        override[leftChild.id] = latestLeft;
       }
       if (!rightNoPin && !(rightIsAbs && leftNoPin && soleAbs)) {
-        override[handleIdx + 1] = latestRight;
+        override[rightChild.id] = latestRight;
       }
       setDragOverride(override);
     };
@@ -300,8 +301,9 @@ export function ResizablePanel(props: ResizablePanelProps) {
               class="rp-cell"
               ref={(el) => {
                 wrapperRefs.set(child.id, el);
+                onCleanup(() => wrapperRefs.delete(child.id));
               }}
-              style={childStyle(child, i())}
+              style={childStyle(child)}
             >
               {child.content()}
             </div>
