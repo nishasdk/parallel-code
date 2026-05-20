@@ -347,6 +347,7 @@ export function TaskPanel(props: TaskPanelProps) {
   const notesAndFilesChild: PanelChild = {
     id: 'notes-files',
     minSize: 60,
+    absorberWeight: 0.5,
     content: () => (
       <div style={{ height: '100%', 'min-height': '200px' }}>
         {isNoneGit() ? (
@@ -417,7 +418,7 @@ export function TaskPanel(props: TaskPanelProps) {
             <ResizablePanel
               direction="vertical"
               persistKey={`task:${props.task.id}`}
-              absorberIds={['ai-terminal']}
+              absorberIds={['notes-files', 'ai-terminal']}
               children={[
                 notesAndFilesChild,
                 shellSectionChild,

@@ -588,13 +588,6 @@ export function TilingLayout() {
                 });
                 const showHandle = () =>
                   !store.focusMode && !child.fixed && i() < panelChildren().length - 1;
-                function unpinHandle() {
-                  const panels = panelChildren();
-                  const left = panels[i()];
-                  const right = panels[i() + 1];
-                  if (!left || !right) return;
-                  deletePanelUserSize([`tiling:${left.id}`, `tiling:${right.id}`]);
-                }
                 return (
                   <>
                     <div style={wrapperStyle()}>{child.content()}</div>
@@ -602,7 +595,15 @@ export function TilingLayout() {
                       <div
                         class={`resize-handle resize-handle-h ${dragging() === i() ? 'dragging' : ''}`}
                         onMouseDown={(e) => handleDragStart(i(), e)}
-                        onDblClick={unpinHandle}
+                        onDblClick={() => {
+                          if (dragging() !== null) return;
+                          const panels = panelChildren();
+                          const left = panels[i()];
+                          const right = panels[i() + 1];
+                          if (!left || !right) return;
+                          deletePanelUserSize([`tiling:${left.id}`, `tiling:${right.id}`]);
+                          requestAnimationFrame(() => updateViewportState());
+                        }}
                       />
                     </Show>
                   </>

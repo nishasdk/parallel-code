@@ -72,9 +72,6 @@ export function TaskNotesBody(props: TaskNotesBodyProps) {
     });
   });
 
-  // notes-files is a weighted absorber in the outer vertical panel, so its
-  // height is layout-driven (flex ratio), not content-driven. min-height is
-  // the floor used when the panel is fresh or unpinned.
   const intrinsicHeight = () => (store.focusMode ? '240px' : '140px');
 
   return (
